@@ -68,12 +68,12 @@ function mixGeneric(a, b, t, {clamp = false} = {})
   throw new TypeError('Unsupported types for mixGeneric');
 }
 
-const corsUrl = 'https://proxy.corsfix.com/?'; // need proxy to allow for cross origin request
+const corsUrl = 'https://my-cors-proxy.nielsdaemen747.workers.dev/?url='; // my own proxy worker on cloudfare
 
 async function getSoundingGraphImgUrl(url)
 {
   try {
-    const response = await fetch(corsUrl + url);
+    const response = await fetch(corsUrl + encodeURIComponent(url));
     const html = await response.text();
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
@@ -88,7 +88,7 @@ async function getSoundingGraphImgUrl(url)
 async function scrapeTableData(url)
 {
   try {
-    const response = await fetch(corsUrl + url);
+    const response = await fetch(corsUrl + encodeURIComponent(url));
     const html = await response.text();
 
     const parser = new DOMParser();
