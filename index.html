@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <title>2D Weather Sandbox</title>
+    <script type="text/javascript" src="libraries/dat.gui.min.js"></script>
+    <script type="text/javascript" src="libraries/pako.min.js"></script>
+    <script type="text/javascript" src="libraries/chart.js"></script>
+    <script type="text/javascript" src="libraries/chartjs-adapter-date-fns.js"></script>
+    <script type="text/javascript" src="app.js"></script>
+    <link rel="shortcut icon" type="image/x-icon" href="favicon.ico">
+    <style>
+        :root {
+            --text-color: #ffffff;
+            --accent-color: #4a90e2;
+            --hover-color: #007bff;
+            --border-radius: 12px;
+            --transition-speed: 0.3s;
+            --shadow: 0 4px 6px rgba(15, 5, 5, 0.1);
+            --soft-gradient: linear-gradient(135deg, rgba(74, 144, 226, 0.1), rgba(0, 123, 255, 0.1));
+        }
+
+        body {
+            margin: 0;
+            font-family: 'Arial', sans-serif;
+            background: url('resources/img/background.png') bottom left no-repeat;
+            background-size: cover;
+            background-attachment: fixed;
+            color: var(--text-color);
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+
+        .main-nav {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0rem 2rem 0rem 2rem;
+            background: rgba(0, 0, 0, 0.13);
+            backdrop-filter: blur(10px);
+            z-index: 0;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+        }
+
+        .nav-title h1 {
+            margin: 0;
+            font-size: 2.0rem;
+            color: var(--text-color);
+            font-weight: 600;
+            letter-spacing: 0.5px;
+        }
+
+        .nav-icons {
+            display: flex;
+            padding-top: 1rem;
+            gap: 1.5rem;
+            align-items: center;
+        }
+
+        .nav-icons img {
+            height: 50px;
+            width: auto;
+            transition: all 0.3s ease;
+            opacity: 0.9;
+        }
+
+        .nav-icons a:hover img {
+            transform: scale(1.1);
+            opacity: 1;
+        }
+
+        .resolution-warning {
+            margin-top: 4rem;
+            max-width: 1200px;
+            padding: 1rem 2rem;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: var(--border-radius);
+
+        }
+
+        .resolution-warning p {
+            margin: 0;
+            font-size: 1.1rem;
+            color: rgba(255, 255, 255, 0.9);
+            line-height: 1.5;
+        }
+
+        #IntroScreen {
+            padding: 20px;
+            max-width: 1200px;
+            margin: 20px;
+            border-radius: var(--border-radius);
+            animation: fadeIn 1s ease-in-out;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+
+        table td {
+            padding: 10px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        input[type="range"] {
+            width: 100%;
+            max-width: 800px;
+            margin: 10px 0;
+            height: 8px;
+        }
+
+        input[type="button"] {
+            background: #007bff;
+            border: none;
+            padding: 12px 24px;
+            color: var(--text-color);
+            border-radius: var(--border-radius);
+            cursor: pointer;
+            font-size: 1rem;
+            transition: transform var(--transition-speed) ease, box-shadow var(--transition-speed) ease;
+            box-shadow: var(--shadow);
+        }
+
+        input[type="button"]:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.2);
+            background-color: #004a9a;
+            transition: var(--transition-speed);
+        }
+
+        #help {
+            margin: 20px 0;
+            padding: 20px;
+            background: var(--soft-gradient);
+            border-radius: var(--border-radius);
+            box-shadow: var(--shadow);
+            animation: fadeIn 1s ease-in-out;
+        }
+
+        .tips,
+        .controls,
+        .example-files {
+            margin: 20px 0;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: var(--border-radius);
+            box-shadow: var(--shadow);
+        }
+
+        .support {
+            margin: 20px 0;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: var(--border-radius);
+            box-shadow: var(--shadow);
+            text-align: center;
+        }
+
+        #mainCanvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            z-index: 0;
+            display: none;
+        }
+
+        #graphCanvas {
+            position: fixed;
+            z-index: 1;
+            display: none;
+        }
+
+        .autopilotNumberInput {
+            background-color: #0000ff;
+            border: 3px solid #0000ff;
+            color: #ffffff;
+        }
+
+        .airbus-switch {
+            display: none
+        }
+
+        .airbus-label {
+            position: relative;
+            width: 50px;
+            height: 50px;
+            background: #222;
+            border: 2px solid #555;
+            border-radius: 10px;
+            box-shadow: inset 0 0 8px #000;
+            color: #fff;
+            font-size: 13px;
+            font-weight: bold;
+            letter-spacing: 1px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            align-items: flex-end;
+        }
+
+        .airbus-label::before {
+            content: "";
+            position: absolute;
+            top: 8px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 60%;
+            height: 10px;
+            background: #020;
+            border: 1px solid #030;
+            border-radius: 2px;
+        }
+
+        .airbus-switch:checked+.airbus-label::before {
+            background: #0f0;
+            box-shadow: 0 0 8px #0f0;
+        }
+
+        :root {
+            --size: 50px
+        }
+
+        .gauge {
+            position: absolute;
+            left: 300px;
+            height: calc(var(--size)/2);
+        }
+
+        svg {
+            display: block;
+            overflow: visible
+        }
+
+        .bg-arc {
+            stroke: #263242;
+            stroke-width: 24;
+            fill: none;
+            stroke-linecap: round
+        }
+
+        .fill-arc {
+            stroke: green;
+            stroke-width: 24;
+            fill: none;
+            stroke-linecap: round;
+            transition: stroke 0.4s linear;
+        }
+
+        .value {
+            font-size: 56px;
+            font-weight: 700;
+            fill: #ffffff;
+            text-anchor: middle
+        }
+    </style>
+</head>
+
+<body id="body" onload="updateSetupSliders();">
+    <nav class="main-nav">
+        <div class="nav-title">
+            <h1>2D Weather Sandbox</h1>
+        </div>
+        <div class="nav-icons">
+            <a href="https://github.com/niels747/2D-Weather-Sandbox" target="_blank" rel="noopener noreferrer">
+                <img src="resources/img/Github.png" alt="GitHub">
+            </a>
+            <a href="https://www.patreon.com/user?u=76043935" target="_blank" rel="noopener noreferrer">
+                <img src="resources/img/Patreon.png" alt="Patreon">
+            </a>
+            <a href="https://www.youtube.com/user/nielsdaemen/videos" target="_blank" rel="noopener noreferrer">
+                <img src="resources/img/Youtube.png" alt="YouTube">
+            </a>
+            <a href="https://discord.gg/c4Xdf92PzG" target="_blank" rel="noopener noreferrer">
+                <img src="resources/img/Discord.png" alt="Discord">
+            </a>
+        </div>
+    </nav>
+
+    <div id="IntroScreen">
+
+        <p style="margin-top: 50px;"></p>
+
+        <div style="width: 100%; height: 500px;">
+            <div style="float: left; margin-right: 100px;">
+                <div>
+                    Preset:<select id="presetSelect" style="margin: 10px;"></select>
+                </div>
+                <div>
+                    <select id="stationSelect"></select>
+                    <input type="date" id="datePicker" value="2025-06-15" min="2010-01-01"
+                        onchange="prepareSounding();" />
+
+                    <select id="hourSelector" onchange="prepareSounding();">
+                        <option value="0">00H</option>
+                        <option value="6">06H</option>
+                        <option value="12" selected>12H</option>
+                        <option value="18">18H</option>
+                    </select>
+                    <p>Select a real world sounding to use as forcing in the simulation</p>
+                </div>
+            </div>
+            <img style="float: left; height: 500px;" id="soundingPreview"
+                alt="Sounding not available, Please select a different time.">
+        </div>
+
+        <form id="startBtn" oninput="updateSetupSliders();">
+            <div class="resolution-warning">
+                <p>Choose a resolution - Higher resolutions provide more detail but significantly impact performance
+                </p>
+            </div>
+
+            <table>
+                <tr>
+                    <td><b>Horizontal resolution</b></td>
+                    <td style="width: 30%">
+                        <input type="range" min="100" max="16000" value="3000" step="100" id="simResSelX" />
+                        <output id="simResShowX"></output>
+                    </td>
+                    <td id="simWorldProperties" style="color:rgb(255, 255, 255); width: 50%"> Cellheight: 40m Sim
+                        width:
+                        40 km</td>
+                </tr>
+                <tr>
+                    <td><b>Vertical resolution</b></td>
+                    <td>
+                        <input type="range" min="100" max="500" value="300" step="10" id="simResSelY" />
+                        <output id="simResShowY"></output>
+                    </td>
+                    <td><i id="simResYWarning" style="color:rgb(255, 61, 61); display: none;">Vertical resolutions
+                            other
+                            than 300 are not optimized and may be buggy!</i></td>
+                </tr>
+                <tr>
+                    <td><b>Simulation height</b></td>
+                    <td>
+                        <input type="range" min="5000" max="15000" value="12000" step="100" id="simHeightSel" />
+                        <output id="simHeightShow"></output>
+                    </td>
+                    <td><i id="simHeightWarning" style="color:rgb(255, 61, 61); display: none;">Sim heights other
+                            than
+                            12000 m are not optimized and may be buggy!</i></td>
+                </tr>
+            </table>
+            <input type="button" value="Create New Simulation" onclick="loadData ()" />
+            <i>Move the mouse until you see a terrain you like, then just click to start.</i>
+        </form>
+
+
+        <p style="margin-top: 70px;">
+            <label for="fileInput">Load Save File:</label>
+            <input type="file" id="fileInput" name="fileInput" accept=".weathersandbox " onchange="loadData()" />
+        </p>
+
+        <div class="example-files">
+            <h3>Example Save Files</h3>
+            <p><a style="color: white" href="./saves/Background image.weathersandbox">Background image</a></p>
+            <p><a style="color: white" href="./saves/Hotlake Valley.weathersandbox">Hotlake Valley</a></p>
+            <p><a style="color: white" href="./saves/Mountain uplift cell.weathersandbox">Mountain Uplift Cell at
+                    sunset</a></p>
+            <p><a style="color: white" href="./saves/480 km map with strong derecho.weathersandbox">480 km map with
+                    strong Derecho</a></p>
+            <p><a style="color: white" href="./saves/Three Nice Cells.weathersandbox">Three Nice Cells</a></p>
+            <p><a style="color: white" href="./saves/Mountain Snow Storm.weathersandbox">Mountain Snow Storm</a></p>
+            <p><a style="color: white" href="./saves/Powerful & Longlasting Cell.weathersandbox">Powerful &
+                    Longlasting
+                    Cell</a></p>
+            <p><a style="color: white" href="./saves/Rain Sucked Up.weathersandbox">Powerful updraft sucking up rain
+                    and
+                    turning it into hail.</a></p>
+            <p><a style="color: white" href="./saves/Powerful Hail and Snow Cells.weathersandbox">Powerful Hail and
+                    Snow
+                    Cells</a></p>
+            <p><a style="color: white" href="./saves/Very nice cell over coastal mountain.weathersandbox">Very nice
+                    cell
+                    over coastal mountain</a></p>
+            <p><a style="color: white" href="./saves/Awesome Convergence Cell.weathersandbox">Awesome Convergence
+                    Cell</a></p>
+            <p><a style="color: white" href="./saves/Two nice cells in lake valley.weathersandbox">Two nice cells in
+                    lake valley</a></p>
+            <p><a style="color: white" href="./saves/Insane CAPE.weathersandbox">Insane CAPE</a></p>
+            <p><a style="color: white" href="./saves/100 X 100 Test.weathersandbox">100 X 100 Test</a></p>
+        </div>
+
+        <div id="help" class="tips">
+            <h2>Tips</h2>
+            <ul>
+                <li>Vertical resolution of 300 gives most realistic results</li>
+                <li>Larger horizontal resolutions allow stronger converging winds to develop, forming more
+                    realistic,
+                    longer lasting cells</li>
+                <li>Performance is mostly GPU dependent, GTX 1070 or better recommended for realtime gameplay</li>
+                <li>If you have a laptop with a dedicated GPU, make sure the browser is actually using it! It's
+                    often
+                    using the integrated graphics by default</li>
+                <li>Play in fullscreen mode (F11)</li>
+            </ul>
+        </div>
+
+        <div class="controls">
+            <h2>Controls</h2>
+            <h3>Mouse</h3>
+            <ul>
+                <li>Middle mouse button to drag the simulation area around</li>
+                <li>Mouse wheel to zoom in and out, Or to change brush size while holding down B</li>
+                <li>Left mouse button to use selected tool. Hold down Ctrl (command on mac) to perform the inverted
+                    action</li>
+                <li>Touchscreen input is pretty basic for now, will add more controls in the future</li>
+            </ul>
+            <h3>Keys</h3>
+            <table style="width: 100%">
+                <tr>
+                    <td>1 - 9</td>
+                    <td>Display Modes</td>
+                </tr>
+                <tr>
+                    <td>QWERTYUIOP [ ] \</td>
+                    <td>Tools</td>
+                </tr>
+                <tr>
+                    <td>Left Ctrl</td>
+                    <td>Invert Tool Action</td>
+                </tr>
+                <tr>
+                    <td>Esc</td>
+                    <td>No Tool, Flashlight</td>
+                </tr>
+                <tr>
+                    <td>Arrows ◄ ▲ ▼ ►</td>
+                    <td>Move View</td>
+                </tr>
+                <tr>
+                    <td>+ -</td>
+                    <td>Zoom In / Out</td>
+                </tr>
+                <tr>
+                    <td>Right Ctrl</td>
+                    <td>Hold For Slower Pan speed</td>
+                </tr>
+                <tr>
+                    <td>Space Bar</td>
+                    <td>Pause / Resume</td>
+                </tr>
+                <tr>
+                    <td>Tab</td>
+                    <td>Show / Hide Velocity Vectors</td>
+                </tr>
+                <tr>
+                    <td>A</td>
+                    <td>Toggle Flight Simulator Mode. Vertical Mouse position controls elevator, Throttle: ▲ ▼ </td>
+                </tr>
+                <tr>
+                    <td>F</td>
+                    <td>Toggle camera following plane</td>
+                </tr>
+                <tr>
+                    <td>Shift</td>
+                    <td>Toggle Gear</td>
+                </tr>
+                <tr>
+                    <td>Z</td>
+                    <td>Drop water from airplane to extinguish fires</td>
+                </tr>
+                <tr>
+                    <td>CapsLk</td>
+                    <td>Autopilot</td>
+                </tr>
+                <tr>
+                    <td>.</td>
+                    <td>Brakes</td>
+                </tr>
+                <tr>
+                    <td>/</td>
+                    <td>Toggle Engine</td>
+                </tr>
+                <tr>
+                    <td>D</td>
+                    <td>Show / Hide Droplets</td>
+                </tr>
+                <tr>
+                    <td>X</td>
+                    <td>Toggle follow droplet</td>
+                </tr>
+                <tr>
+                    <td>G</td>
+                    <td>Show / Hide Sounding Graph</td>
+                </tr>
+                <tr>
+                    <td>N</td>
+                    <td>Show / Hide Weather Stations</td>
+                </tr>
+                <tr>
+                    <td>M</td>
+                    <td>Add / Remove Weather Stations</td>
+                </tr>
+                <tr>
+                    <td>H</td>
+                    <td>Show / Hide GUI</td>
+                </tr>
+                <tr>
+                    <td>V</td>
+                    <td>Reset View</td>
+                </tr>
+                <tr>
+                    <td>B</td>
+                    <td>Hold To Change Brush Size By Scrolling</td>
+                </tr>
+                <tr>
+                    <td>B x 2</td>
+                    <td>Toggle Whole Width Brush</td>
+                </tr>
+                <tr>
+                    <td>L</td>
+                    <td>Reload From Save File</td>
+                </tr>
+                <tr>
+                    <td>Home</td>
+                    <td>1 Iteration/sec</td>
+                </tr>
+                <tr>
+                    <td>End</td>
+                    <td>Auto Iterations/sec</td>
+                </tr>
+                <tr>
+                    <td>PgUp</td>
+                    <td>Increase Iterations/sec</td>
+                </tr>
+                <tr>
+                    <td>PgDn</td>
+                    <td>Decrease Iterations/sec</td>
+                </tr>
+            </table>
+        </div>
+
+        <div class="support">
+            <h1 style="color: rgb(0, 255, 0)">$ Support me on Patreon $</h1>
+            If you love my project and want to support its future development, please consider <a
+                href="https://www.patreon.com/user?u=76043935" target="_blank" rel="noopener noreferrer"
+                style="color: white">supporting me on patreon</a>
+            <br />
+            Every small amount helps! Thank you!
+            <br />
+            <br />
+            <br />
+            <i>By Niels Daemen</i>
+        </div>
+    </div>
+
+    </div>
+
+    <canvas id="graphCanvas"></canvas>
+    <canvas id="dropletInfoCanvas" width="90" height="50"
+        style="z-index: 1; position: absolute; left: 50%; top: 50%;"></canvas>
+    <canvas id="mainCanvas">
+        Your browser does not support HTML5, you must be using a really old browser!
+    </canvas>
+</body>
+
+</html>
