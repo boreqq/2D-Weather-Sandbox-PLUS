@@ -391,6 +391,15 @@ const guiControls_default = {
   brushIntensity : 0.01,
   allowCaves : true,
   showGraph : false,
+  showCAPE : true,
+  showCIN : true,
+  showMLCAPE : true,
+  showCAPE03 : true,
+  reflectivityBackground : true,
+  debugReflectivity : false,
+  reflectivityGain : 0.0,
+  reflectivityBoost : 10000.0,
+  reflectivityPixelSize : 8,
   realDewPoint : false, // show real dew point in graph, instead of dew point with cloud water included
   enablePrecipitation : true,
   showDrops : false,
@@ -419,6 +428,7 @@ var sunIsUp = true;
 var airplaneMode = false;
 
 var dropletFollowID = -1;
+var reflectivityDbgEl;
 
 var minShadowLight = 0.02;
 
@@ -3566,6 +3576,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         'Snow' : 'TOOL_WALL_SNOW',
         'Wind' : 'TOOL_WIND',
         'Weather Station' : 'TOOL_STATION',
+        'Sounding Probe' : 'TOOL_SOUNDING',
       })
       .name('Tool')
       .listen();
@@ -3780,7 +3791,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         'Snow Deposition' : 'DISP_PRECIPFEEDBACK_SNOW',
         'Precipitation/Soil Moisture' : 'DISP_SOIL_MOISTURE',
         'Curl' : 'DISP_CURL',
-        'Air Quality' : 'DISP_AIRQUALITY'
+        'Air Quality' : 'DISP_AIRQUALITY',
+        'Reflectivity (beta)' : 'DISP_REFLECTIVITY'
       })
       .name('Display Mode')
       .listen();
@@ -3807,7 +3819,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     display_folder.add(guiControls, 'SmoothCam').onChange(function() { cam.smooth = guiControls.SmoothCam; }).name('Smooth Camera');
 
-    display_folder.add(guiControls, 'showGraph').onChange(hideOrShowGraph).name('Show Sounding Graph').listen();
     display_folder.add(guiControls, 'showDrops').name('Show Droplets').listen();
     display_folder.add(guiControls, 'realDewPoint').name('Show Real Dew Point');
 
@@ -3884,6 +3895,17 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     datGui.add(guiControls, 'paused').onChange(handlePause).name('Paused').listen();
     datGui.add(guiControls, 'download').name('Save Simulation to File');
 
+    // Soundings tab at the bottom
+    var soundings_folder = datGui.addFolder('Soundings');
+    soundings_folder.add(guiControls, 'showGraph').onChange(hideOrShowGraph).name('Show Sounding Graph').listen();
+    soundings_folder.add(guiControls, 'showCAPE').name('Show CAPE').listen();
+    soundings_folder.add(guiControls, 'showCIN').name('Show CIN').listen();
+    soundings_folder.add(guiControls, 'showMLCAPE').name('Show MLCAPE').listen();
+    soundings_folder.add(guiControls, 'showCAPE03').name('Show 0-3 km CAPE').listen();
+    soundings_folder.add(guiControls, 'reflectivityBackground').name('Reflectivity Background').listen();
+    soundings_folder.add(guiControls, 'debugReflectivity').name('Debug dBZ at cursor').listen();
+    soundings_folder.add(guiControls, 'reflectivityPixelSize', 1, 32, 1).name('Reflectivity Pixel size').listen();
+
     datGui.width = 400;
   }
 
@@ -3899,14 +3921,23 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     gl.uniform1f(gl.getUniformLocation(postProcessingProgram, 'exposure'), guiControls.exposure);
     datGui.show(); // unhide
 
-    clockEl = document.createElement('div');
-    document.body.appendChild(clockEl);
+  clockEl = document.createElement('div');
+  document.body.appendChild(clockEl);
 
-    clockEl.innerHTML = ''
-    clockEl.style.position = 'absolute';
-    clockEl.style.fontFamily = 'Monospace';
-    clockEl.style.fontSize = '35px';
-    clockEl.style.color = 'white';
+  clockEl.innerHTML = ''
+  clockEl.style.position = 'absolute';
+  clockEl.style.fontFamily = 'Monospace';
+  clockEl.style.fontSize = '35px';
+  clockEl.style.color = 'white';
+
+  reflectivityDbgEl = document.createElement('div');
+  reflectivityDbgEl.style.position = 'absolute';
+  reflectivityDbgEl.style.fontFamily = 'Monospace';
+  reflectivityDbgEl.style.fontSize = '16px';
+  reflectivityDbgEl.style.color = '#00ff00';
+  reflectivityDbgEl.style.pointerEvents = 'none';
+  reflectivityDbgEl.style.display = 'none';
+  document.body.appendChild(reflectivityDbgEl);
 
     simDateTime = new Date(2000, Math.floor(guiControls.month) - 1, (guiControls.month % 1) * 30.417);
 
@@ -4088,23 +4119,30 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       c.stroke();
 
       // Draw rising parcel temperature line
-      var water = waterTextureValues[4 * simYpos];
-      var potentialTemp = baseTextureValues[4 * simYpos + 3];
-      var initialTemperature = potentialTemp - ((simYpos / sim_res_y) * guiControls.simHeight * guiControls.dryLapseRate) / 1000.0;
-      var initialCloudWater = waterTextureValues[4 * simYpos + 1];
-      // var temp = potentialTemp - ((y / sim_res_y) * guiControls.simHeight *
-      // guiControls.dryLapseRate) / 1000.0 - 273.15;
+      // Force parcel sampling to surface level of this column only (ignore cursor Y)
+      var parcelY = surfaceLevel;
+      var water = waterTextureValues[4 * parcelY];
+      var potentialTemp = baseTextureValues[4 * parcelY + 3];
+      var initialTemperature = potentialTemp - ((parcelY / sim_res_y) * guiControls.simHeight * guiControls.dryLapseRate) / 1000.0;
+      var initialCloudWater = waterTextureValues[4 * parcelY + 1];
       var prevTemp = initialTemperature;
       var prevCloudWater = initialCloudWater;
 
       var drylapsePerCell = ((-1.0 / sim_res_y) * guiControls.simHeight * guiControls.dryLapseRate) / 1000.0;
+      var cellHeightLocal = guiControls.simHeight / sim_res_y; // meters per vertical cell
 
       reachedSaturation = false;
+      var cape = 0.0;          // Convective Available Potential Energy (J/kg)
+      var cape03 = 0.0;        // CAPE limited to lowest 3 km (J/kg)
+      var cin = 0.0;           // Convective Inhibition (J/kg)
+      const g = 9.81;          // gravity (m/s^2)
+      var positiveReached = false;
+
 
       c.beginPath();
-      var scrYpos = map_range(simYpos, sim_res_y, 0, 0, graphBottem);
+      var scrYpos = map_range(parcelY, sim_res_y, 0, 0, graphBottem);
       c.moveTo(T_to_Xpos(KtoC(initialTemperature), scrYpos), scrYpos);
-      for (var y = simYpos + 1; y < sim_res_y; y++) {
+      for (var y = parcelY + 1; y < sim_res_y; y++) {
         var dT = drylapsePerCell;
 
         var cloudWater = Math.max(water - maxWater(prevTemp + dT),
@@ -4124,6 +4162,21 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
         prevTemp = T;
         prevCloudWater = Math.max(water - maxWater(prevTemp), 0.0);
+
+        // accumulate CAPE/CIN using temperature buoyancy of parcel vs environment
+        if (wallTextureValues[4 * y + 1] != 0) {
+          var envTempK = baseTextureValues[4 * y + 3] - ((y / sim_res_y) * guiControls.simHeight * guiControls.dryLapseRate) / 1000.0;
+          var buoyancy = (T - envTempK) / envTempK;
+          if (buoyancy > 0.0) {
+            positiveReached = true;
+            cape += buoyancy * g * cellHeightLocal;
+            if (((y - surfaceLevel) * cellHeightLocal) <= 3000.0) {
+              cape03 += buoyancy * g * cellHeightLocal;
+            }
+          } else if (!positiveReached) {
+            cin += (-buoyancy) * g * cellHeightLocal;
+          }
+        }
 
         if (!reachedSaturation && prevCloudWater > 0.0) {
           reachedSaturation = true;
@@ -4152,6 +4205,88 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         c.strokeStyle = '#008800';
 
       c.stroke();
+
+      // --- Additional parcel diagnostics: CIN, MLCAPE, 0-3 km CAPE ---
+      function integrateParcelEnergies(startY, parcelWater, parcelTempK)
+      {
+        var prevT = parcelTempK;
+        var prevCloud = Math.max(parcelWater - maxWater(prevT), 0.0);
+        var localCape = 0.0;
+        var localCin = 0.0;
+        var localCape03 = 0.0;
+        var positiveReachedLocal = false;
+
+        for (var yy = startY + 1; yy < sim_res_y; yy++) {
+          var dTlocal = drylapsePerCell;
+          var cloudLocal = Math.max(parcelWater - maxWater(prevT + dTlocal), 0.0);
+          var dWtLocal = (cloudLocal - prevCloud) * guiControls.evapHeat;
+          var actualChange = dT_saturated(dTlocal, dWtLocal);
+          var parcelTk = prevT + actualChange;
+
+          prevT = parcelTk;
+          prevCloud = Math.max(parcelWater - maxWater(prevT), 0.0);
+
+          if (wallTextureValues[4 * yy + 1] != 0) {
+            var envTk = baseTextureValues[4 * yy + 3] - ((yy / sim_res_y) * guiControls.simHeight * guiControls.dryLapseRate) / 1000.0;
+            var buoy = (parcelTk - envTk) / envTk;
+            if (buoy > 0.0) {
+              positiveReachedLocal = true;
+              localCape += buoy * g * cellHeightLocal;
+              if (((yy - surfaceLevel) * cellHeightLocal) <= 3000.0) {
+                localCape03 += buoy * g * cellHeightLocal;
+              }
+            } else if (!positiveReachedLocal) {
+              localCin += (-buoy) * g * cellHeightLocal;
+            } else {
+              break; // stop after the first stable layer above positive buoyancy
+            }
+          }
+        }
+        return {cape: localCape, cin: localCin, cape03: localCape03};
+      }
+
+      // mixed-layer (0-1 km) initial parcel properties (tied to column, not cursor height)
+      var mlDepth = 1000.0; // meters
+      var mlSumT = 0.0;
+      var mlSumW = 0.0;
+      var mlCount = 0;
+      for (var yy = surfaceLevel; yy < sim_res_y && ((yy - surfaceLevel) * cellHeightLocal) <= mlDepth; yy++) {
+        if (wallTextureValues[4 * yy + 1] == 0) continue;
+        var layerTk = baseTextureValues[4 * yy + 3] - ((yy / sim_res_y) * guiControls.simHeight * guiControls.dryLapseRate) / 1000.0;
+        mlSumT += layerTk;
+        mlSumW += waterTextureValues[4 * yy];
+        mlCount++;
+      }
+      var mlInitTemp = mlCount > 0 ? mlSumT / mlCount : initialTemperature;
+      var mlWater = mlCount > 0 ? mlSumW / mlCount : water;
+
+      // fallback: if averaged parcel fails (e.g., no valid cells), reuse surface parcel
+      var mlEnergy = integrateParcelEnergies(surfaceLevel, mlWater, mlInitTemp);
+      if (mlEnergy.cape < 1.0 && cape > 50.0) {
+        mlEnergy = integrateParcelEnergies(surfaceLevel, water, initialTemperature);
+      }
+
+      // place diagnostics near top-right, left of wind barbs/profile
+      c.font = '18px Arial';
+      c.fillStyle = 'white';
+      var diagX = this.graphCanvas.width - 230; // keep clear of wind profile drawn near right edge
+      var diagLine = 0;
+      if (guiControls.showCAPE) {
+        c.fillText('CAPE: ' + Math.round(cape) + ' J/kg', diagX, 25 + diagLine * 20);
+        diagLine++;
+      }
+      if (guiControls.showCIN) {
+        c.fillText('CIN : ' + Math.round(cin) + ' J/kg', diagX, 25 + diagLine * 20);
+        diagLine++;
+      }
+      if (guiControls.showMLCAPE) {
+        c.fillText('MLCAPE: ' + Math.round(mlEnergy.cape) + ' J/kg', diagX, 25 + diagLine * 20);
+        diagLine++;
+      }
+      if (guiControls.showCAPE03) {
+        c.fillText('0-3 km CAPE: ' + Math.round(cape03) + ' J/kg', diagX, 25 + diagLine * 20);
+        diagLine++;
+      }
 
 
       c.fillText('' + printDistance(map_range(simXpos, 0, sim_res_y, 0, guiControls.simHeight)), this.graphCanvas.width - 70, 20);
@@ -4205,6 +4340,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   var mouseXinSim, mouseYinSim;
   var prevMouseXinSim, prevMouseYinSim;
+  var soundingProbeActive = false;
+  var soundingProbeX = 0.0;
+  var soundingProbeY = 0.0;
+  var soundingProbeNeedsRedraw = false;
 
   window.addEventListener('resize', function() {
     canvas.width = window.innerWidth;
@@ -4559,7 +4698,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     } else if (event.key == 9) {
       guiControls.displayMode = 'DISP_PRECIPFEEDBACK_MASS';
     } else if (event.key == 0) {
-      guiControls.displayMode = 'DISP_PRECIPFEEDBACK_HEAT';
+      guiControls.displayMode = 'DISP_REFLECTIVITY';
     } else if (event.code == 'KeyK') {
       guiControls.displayMode = 'DISP_AIRQUALITY';
     } else if (event.key == 'ArrowLeft') {
@@ -5795,6 +5934,20 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
           inputType = 21;
         else if (guiControls.tool == 'TOOL_VEGETATION')
           inputType = 22;
+        else if (guiControls.tool == 'TOOL_SOUNDING') {
+          // activate probe and skip writing to simulation fields
+          soundingProbeActive = true;
+          soundingProbeX = guiControls.wrapHorizontally ? mod(mouseXinSim, 1.0) : clamp(mouseXinSim, 0.0, 1.0);
+          soundingProbeY = clamp(mouseYinSim, 0.0, 1.0);
+          soundingProbeNeedsRedraw = true;
+          if (!guiControls.showGraph) {
+            guiControls.showGraph = true;
+            hideOrShowGraph();
+            // ensure first render happens
+            soundingProbeNeedsRedraw = true;
+          }
+          inputType = -1; // don't inject into sim
+        }
 
         var intensity = guiControls.brushIntensity;
 
@@ -6034,7 +6187,12 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       } // end of simulation part
 
       if (guiControls.showGraph) {
-        soundingGraph.draw(Math.floor(Math.abs(mod(mouseXinSim * sim_res_x, sim_res_x))), Math.floor(mouseYinSim * sim_res_y));
+        var probeX = soundingProbeActive ? soundingProbeX : mouseXinSim;
+        var probeY = soundingProbeActive ? soundingProbeY : mouseYinSim;
+        if (!soundingProbeActive || soundingProbeNeedsRedraw) {
+          soundingGraph.draw(Math.floor(Math.abs(mod(probeX * sim_res_x, sim_res_x))), Math.floor(clamp(probeY, 0.0, 1.0) * sim_res_y));
+          soundingProbeNeedsRedraw = false; // freeze until next probe move/click
+        }
       }
 
     } // END OF NOT SETUP MODE
@@ -6043,7 +6201,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     let cursorType = 1.0; // normal circular brush
     if (guiControls.wholeWidth) {
       cursorType = 2.0;   // cursor whole width brush
-    } else if (SETUP_MODE || (inputType <= 0 && !bPressed && (guiControls.tool == 'TOOL_NONE' || guiControls.tool == 'TOOL_STATION'))) {
+    } else if (SETUP_MODE || (inputType <= 0 && !bPressed && (guiControls.tool == 'TOOL_NONE' || guiControls.tool == 'TOOL_STATION' || guiControls.tool == 'TOOL_SOUNDING'))) {
       cursorType = 0;     // cursor off sig
     }
 
@@ -6090,11 +6248,36 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       airplane.display();
     }
 
+    // Reflectivity debug readout
+    if (guiControls.displayMode == 'DISP_REFLECTIVITY' && guiControls.debugReflectivity) {
+      var simXposDbg = Math.floor(Math.abs(mod(mouseXinSim * sim_res_x, sim_res_x)));
+      var simYposDbg = Math.min(Math.max(Math.floor(mouseYinSim * sim_res_y), 0), sim_res_y - 1);
+
+      gl.bindFramebuffer(gl.FRAMEBUFFER, frameBuff_1);
+      gl.readBuffer(gl.COLOR_ATTACHMENT1); // waterTexture_1
+      var waterDbg = new Float32Array(4);
+      gl.readPixels(simXposDbg, simYposDbg, 1, 1, gl.RGBA, gl.FLOAT, waterDbg);
+
+      var p_dbg = Math.max(waterDbg[2], 0.0);
+      var z_raw_dbg = p_dbg * guiControls.reflectivityGain + p_dbg * p_dbg * guiControls.reflectivityBoost;
+      var dBZ_dbg = 10.0 * Math.log10(z_raw_dbg + 1e-6);
+      reflectivityDbgEl.style.display = 'block';
+      reflectivityDbgEl.style.left = mouseX + 12 + 'px';
+      reflectivityDbgEl.style.top = mouseY + 12 + 'px';
+      reflectivityDbgEl.textContent = 'dBZ*: ' + dBZ_dbg.toFixed(1);
+    } else if (reflectivityDbgEl) {
+      reflectivityDbgEl.style.display = 'none';
+    }
+
     // render to canvas
+    const overlayReflectivity = guiControls.displayMode == 'DISP_REFLECTIVITY' && !guiControls.reflectivityBackground;
+    const displayModeEffective = overlayReflectivity ? 'DISP_REAL' : guiControls.displayMode;
+
     gl.useProgram(realisticDisplayProgram);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null); // null is canvas
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.clearColor(0.0, 0.0, 0.0, 1.0);        // background color
+    gl.disable(gl.BLEND);
     gl.clear(gl.COLOR_BUFFER_BIT);
 
 
@@ -6103,7 +6286,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     gl.activeTexture(gl.TEXTURE2);
     gl.bindTexture(gl.TEXTURE_2D, wallTexture_1);
 
-    if (guiControls.displayMode == 'DISP_REAL') {
+    if (displayModeEffective == 'DISP_REAL') {
 
       { //  Abient Light Calculation
         gl.bindVertexArray(postProcessingVao);
@@ -6351,7 +6534,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.activeTexture(gl.TEXTURE9);
       gl.bindTexture(gl.TEXTURE_2D, colorScalesTexture);
 
-      if (guiControls.displayMode == 'DISP_TEMPERATURE') {
+      if (displayModeEffective == 'DISP_TEMPERATURE') {
         gl.useProgram(temperatureDisplayProgram);
         gl.uniform2f(gl.getUniformLocation(temperatureDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
         gl.uniform3f(gl.getUniformLocation(temperatureDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
@@ -6367,14 +6550,14 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
           gl.uniform1f(gl.getUniformLocation(temperatureDisplayProgram, 'displayVectorField'), 0.0);
         }
 
-      } else if (guiControls.displayMode == 'DISP_AIRQUALITY') {
+      } else if (displayModeEffective == 'DISP_AIRQUALITY') {
         gl.useProgram(airQualityDisplayProgram);
         gl.uniform2f(gl.getUniformLocation(airQualityDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
         gl.uniform3f(gl.getUniformLocation(airQualityDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
         gl.uniform4f(gl.getUniformLocation(airQualityDisplayProgram, 'cursor'), mouseXinSim, mouseYinSim, guiControls.brushSize * 0.5, cursorType);
         gl.uniform1f(gl.getUniformLocation(airQualityDisplayProgram, 'Xmult'), horizontalDisplayMult);
 
-      } else if (guiControls.displayMode == 'DISP_IRDOWNTEMP') {
+      } else if (displayModeEffective == 'DISP_IRDOWNTEMP') {
         gl.useProgram(IRtempDisplayProgram);
         gl.uniform2f(gl.getUniformLocation(IRtempDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
         gl.uniform3f(gl.getUniformLocation(IRtempDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
@@ -6384,7 +6567,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, lightTexture_0);
-      } else if (guiControls.displayMode == 'DISP_IRUPTEMP') {
+      } else if (displayModeEffective == 'DISP_IRUPTEMP') {
         gl.useProgram(IRtempDisplayProgram);
         gl.uniform2f(gl.getUniformLocation(IRtempDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
         gl.uniform3f(gl.getUniformLocation(IRtempDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
@@ -6400,8 +6583,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         gl.uniform3f(gl.getUniformLocation(universalDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
         gl.uniform4f(gl.getUniformLocation(universalDisplayProgram, 'cursor'), mouseXinSim, mouseYinSim, guiControls.brushSize * 0.5, cursorType);
         gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'Xmult'), horizontalDisplayMult);
+        gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'reflectivityMode'), 0);
+        gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflMult'), 1.0);
 
-        switch (guiControls.displayMode) {
+        switch (displayModeEffective) {
         case 'DISP_HORIVEL':
           gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'quantityIndex'), 0);
           gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'dispMultiplier'), 10.0); // 20.0
@@ -6422,6 +6607,21 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
           gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'quantityIndex'), 1);
           gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'dispMultiplier'), 50000.0);
           break;
+        case 'DISP_REFLECTIVITY':
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindTexture(gl.TEXTURE_2D, waterTexture_1);
+        gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'quantityIndex'), 2); // precipitation mass from waterTexture_1
+        gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'dispMultiplier'), 1.0);
+        gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'reflectivityMode'), 1);
+        gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflMult'), guiControls.reflectivityGain); // user gain
+        gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflBoost'), guiControls.reflectivityBoost);
+        gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflPixelSize'), guiControls.reflectivityPixelSize);
+        gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'reflBackground'), guiControls.reflectivityBackground ? 1 : 0);
+        if (!guiControls.reflectivityBackground) {
+          gl.enable(gl.BLEND);
+          gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        }
+        break;
         case 'DISP_PRECIPFEEDBACK_MASS':
           gl.activeTexture(gl.TEXTURE0);
           gl.bindTexture(gl.TEXTURE_2D, precipitationFeedbackTexture);
@@ -6470,6 +6670,32 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); // draw to canvas
     }
 
+    if (overlayReflectivity) {
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+      gl.useProgram(universalDisplayProgram);
+      gl.uniform2f(gl.getUniformLocation(universalDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
+      gl.uniform3f(gl.getUniformLocation(universalDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
+      gl.uniform4f(gl.getUniformLocation(universalDisplayProgram, 'cursor'), mouseXinSim, mouseYinSim, guiControls.brushSize * 0.5, cursorType);
+      gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'Xmult'), horizontalDisplayMult);
+      gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'reflectivityMode'), 1);
+      gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflMult'), guiControls.reflectivityGain);
+      gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflBoost'), guiControls.reflectivityBoost);
+      gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflPixelSize'), guiControls.reflectivityPixelSize);
+      gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'reflBackground'), guiControls.reflectivityBackground ? 1 : 0);
+      gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'quantityIndex'), 2);
+      gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'dispMultiplier'), 1.0);
+
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, waterTexture_1);
+      gl.activeTexture(gl.TEXTURE2);
+      gl.bindTexture(gl.TEXTURE_2D, wallTexture_1);
+
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      gl.disable(gl.BLEND);
+    }
+
     if (displayWeatherStations) {
       for (i = 0; i < weatherStations.length; i++) {
         weatherStations[i].updateCanvas(); // update weather stations
@@ -6486,6 +6712,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   {
     if (guiControls.showGraph) {
       soundingGraph.graphCanvas.style.display = 'block';
+      soundingProbeNeedsRedraw = true;
     } else {
       soundingGraph.graphCanvas.style.display = 'none';
     }
@@ -6783,3 +7010,4 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     }
   }
 } // end of mainscript
+

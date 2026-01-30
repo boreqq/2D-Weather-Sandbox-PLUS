@@ -227,11 +227,13 @@ vec4 getAirColor(vec2 fragCoordIn)
 
   float cloudDensity = max(cloudwater * 13.6, 0.0);
 
-  float totalDensity = cloudDensity + water[PRECIPITATION] * 0.8; // visualize precipitation
+  // Suppress “bloby” precipitation contribution in realistic view
+  float precipDensity = min(water[PRECIPITATION] * 0.08, 0.5); // much weaker visual weight
 
+  float totalDensity = cloudDensity + precipDensity; // visualize precipitation softly
 
   // float cloudOpacity = clamp(cloudwater * 4.0, 0.0, 1.0);
-  float cloudOpacity = clamp(1.0 - (1.0 / (1. + totalDensity)), 0.0, 1.0);
+  float cloudOpacity = clamp(1.0 - (1.0 / (1. + totalDensity)), 0.0, 0.7);
 
   const vec3 smokeThinCol = vec3(0.8, 0.51, 0.26);
   const vec3 smokeThickCol = vec3(0., 0., 0.);
