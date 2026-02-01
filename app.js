@@ -400,6 +400,8 @@ const guiControls_default = {
   reflectivityGain : 0.0,
   reflectivityBoost : 10000.0,
   reflectivityPixelSize : 8,
+  reflectivityRefreshSec : 2.0,
+  radarProduct : 'RADAR_REFLECTIVITY', // RADAR_REFLECTIVITY | RADAR_RHOHV
   realDewPoint : false, // show real dew point in graph, instead of dew point with cloud water included
   enablePrecipitation : true,
   showDrops : false,
@@ -429,6 +431,7 @@ var airplaneMode = false;
 
 var dropletFollowID = -1;
 var reflectivityDbgEl;
+var lastReflectivitySnapshotTime = -Infinity;
 
 var minShadowLight = 0.02;
 
@@ -451,7 +454,9 @@ var iterNum = 0;
 
 // global framebuffers for measurements
 var frameBuff_0;
+var frameBuff_1;
 var lightFrameBuff_0;
+var reflectivitySnapshotFBO;
 
 var dryLapse;
 
@@ -1259,8 +1264,165 @@ class Weatherstation
   }
 }
 
+class RadarTower
+{
+  #width = 120;
+  #height = 70;
+  #mainDiv;
+  #canvas;
+  #ctx;
+  #x;
+  #y;
+  #rangeMeters = 100000.0; // 100 km default range
+  #lastMeasureMs = -Infinity;
+  _tmpPixel;
+  _tmpWall;
+  maxDbz = -999.0;
+
+  constructor(xIn, yIn)
+  {
+    this.#x = Math.floor(xIn);
+    this.#y = Math.floor(yIn);
+    this.#mainDiv = document.createElement('div');
+    this.#canvas = document.createElement('canvas');
+    this.#mainDiv.appendChild(this.#canvas);
+    document.body.appendChild(this.#mainDiv);
+    this.#canvas.height = this.#height;
+    this.#canvas.width = this.#width;
+
+    this.#mainDiv.style.position = 'absolute';
+    this.#mainDiv.style.width = '0px';
+    this.#mainDiv.style.height = '0px';
+
+    this.#ctx = this.#canvas.getContext('2d');
+
+    this.#canvas.style.position = 'absolute';
+    this.#canvas.style.zIndex = 1;
+
+    let self = this;
+    this.#canvas.addEventListener('mousedown', function(event) {
+      if (event.button == 0 && guiControls.tool == 'TOOL_RADAR') {
+        self.destroy();
+        event.stopPropagation();
+      }
+    });
+    this.#canvas.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+
+    this._tmpPixel = new Float32Array(4);
+    this._tmpWall = new Int8Array(4);
+    this.setHidden(false);
+  }
+
+  measure(nowMs)
+  {
+    const now = nowMs ?? (performance.now ? performance.now() : Date.now());
+    const minInterval = Math.max(400, guiControls.reflectivityRefreshSec * 1000.0);
+    if (now - this.#lastMeasureMs < minInterval) {
+      this.updateCanvas();
+      return;
+    }
+
+    // sample max dBZ within rangeMeters using coarse grid to avoid stutter
+    const rangeCells = Math.min(this.#rangeMeters / cellHeight, Math.min(sim_res_x, sim_res_y));
+    const sampleGrid = 25; // ~25 x 25 samples
+    const step = Math.max(8, Math.floor((rangeCells * 2) / sampleGrid));
+    const radius2 = rangeCells * rangeCells;
+    const minX = Math.max(0, Math.floor(this.#x - rangeCells));
+    const maxX = Math.min(sim_res_x - 1, Math.floor(this.#x + rangeCells));
+    const minY = Math.max(0, Math.floor(this.#y - rangeCells));
+    const maxY = Math.min(sim_res_y - 1, Math.floor(this.#y + rangeCells));
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, reflectivitySnapshotFBO);
+    gl.readBuffer(gl.COLOR_ATTACHMENT0); // reflectivitySnapshotTex
+
+    let maxDbzLocal = -999.0;
+    for (let yy = minY; yy <= maxY; yy += step) {
+      let dy = yy - this.#y;
+      for (let xx = minX; xx <= maxX; xx += step) {
+        let dx = xx - this.#x;
+        if (dx * dx + dy * dy > radius2)
+          continue;
+        gl.readPixels(xx, yy, 1, 1, gl.RGBA, gl.FLOAT, this._tmpPixel);
+        let p = Math.max(this._tmpPixel[2], 0.0);
+        if (p <= 0.0)
+          continue;
+
+        // skip ground/obstacle cells by checking wall texture
+        gl.bindFramebuffer(gl.FRAMEBUFFER, frameBuff_1);
+        gl.readBuffer(gl.COLOR_ATTACHMENT2); // wallTexture_1
+        gl.readPixels(xx, yy, 1, 1, gl.RGBA_INTEGER, gl.BYTE, this._tmpWall);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, reflectivitySnapshotFBO);
+        gl.readBuffer(gl.COLOR_ATTACHMENT0);
+        if (this._tmpWall[1] <= 0) // wall/ground -> ignore clutter
+          continue;
+
+        let z_raw = p * guiControls.reflectivityGain + p * p * guiControls.reflectivityBoost;
+        let dbz = 10.0 * Math.log10(z_raw + 1e-6);
+        if (dbz > maxDbzLocal)
+          maxDbzLocal = dbz;
+      }
+    }
+    this.maxDbz = maxDbzLocal;
+    this.#lastMeasureMs = now;
+    this.updateCanvas();
+  }
+
+  updateCanvas()
+  {
+    let screenX = simToScreenX(this.#x) - this.#width / 2;
+    let screenY = simToScreenY(this.#y) - this.#height;
+
+    this.#mainDiv.style.left = screenX + 'px';
+    this.#mainDiv.style.top = screenY + 'px';
+
+    let c = this.#ctx;
+    c.clearRect(0, 0, this.#width, this.#height);
+    c.fillStyle = '#00000000';
+    c.fillRect(0, 0, this.#width, this.#height);
+
+    c.font = '15px Arial';
+    c.fillStyle = '#FFFFFF';
+    c.fillText('Radar Tower', 10, 15);
+
+    c.font = '12px Arial';
+    c.fillStyle = '#00FFFF';
+    c.fillText('Range: 100 km', 10, 30);
+
+    const hasEcho = this.maxDbz > -900;
+    c.font = '18px Arial';
+    c.fillStyle = hasEcho ? '#ffcc00' : '#cccccc';
+    c.fillText(hasEcho ? this.maxDbz.toFixed(1) + ' dBZ' : '-- dBZ', 10, 52);
+
+    // position pointer line (same style as weather station)
+    c.beginPath();
+    c.moveTo(this.#width / 2, this.#height * 0.80);
+    c.lineTo(this.#width / 2, this.#height);
+    c.strokeStyle = 'white';
+    c.stroke();
+  }
+
+  setHidden(hidden)
+  {
+    this.#mainDiv.style.display = hidden ? 'none' : 'block';
+  }
+
+  getXpos() { return this.#x; }
+  getYpos() { return this.#y; }
+
+  destroy()
+  {
+    if (this.#mainDiv && this.#mainDiv.parentNode)
+      this.#mainDiv.parentNode.removeChild(this.#mainDiv);
+    let idx = radarTowers.indexOf(this);
+    if (idx >= 0)
+      radarTowers.splice(idx, 1);
+  }
+}
+
 
 let weatherStations = []; // array holding all weather stations
+let radarTowers = [];    // array holding all radar towers
+let radarNeedsMeasure = false;
 
 
 async function loadData()
@@ -3576,6 +3738,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         'Snow' : 'TOOL_WALL_SNOW',
         'Wind' : 'TOOL_WIND',
         'Weather Station' : 'TOOL_STATION',
+        'Radar Tower' : 'TOOL_RADAR',
         'Sounding Probe' : 'TOOL_SOUNDING',
       })
       .name('Tool')
@@ -3902,9 +4065,19 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     soundings_folder.add(guiControls, 'showCIN').name('Show CIN').listen();
     soundings_folder.add(guiControls, 'showMLCAPE').name('Show MLCAPE').listen();
     soundings_folder.add(guiControls, 'showCAPE03').name('Show 0-3 km CAPE').listen();
-    soundings_folder.add(guiControls, 'reflectivityBackground').name('Reflectivity Background').listen();
-    soundings_folder.add(guiControls, 'debugReflectivity').name('Debug dBZ at cursor').listen();
-    soundings_folder.add(guiControls, 'reflectivityPixelSize', 1, 32, 1).name('Reflectivity Pixel size').listen();
+
+    // Radar-specific controls
+    var radar_folder = datGui.addFolder('Radar');
+    radar_folder.add(guiControls, 'reflectivityBackground').name('Reflectivity Background').listen();
+    radar_folder.add(guiControls, 'debugReflectivity').name('Debug dBZ at cursor').listen();
+    radar_folder.add(guiControls, 'reflectivityPixelSize', 1, 32, 1).name('Reflectivity Pixel size').listen();
+    radar_folder.add(guiControls, 'reflectivityRefreshSec', 0.5, 10.0, 0.1)
+      .name('Radar refresh (s)')
+      .listen();
+    radar_folder.add(guiControls, 'radarProduct', {
+      'Reflectivity (dBZ)' : 'RADAR_REFLECTIVITY',
+      'Correlation Coefficient (ρhv)' : 'RADAR_RHOHV',
+    }).name('Radar Product');
 
     datGui.width = 400;
   }
@@ -4533,6 +4706,13 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
         if (simXpos >= 0 && simXpos < sim_res_x)
           weatherStations.push(new Weatherstation(simXpos, simYpos)); // add weather station
+      } else if (guiControls.tool == 'TOOL_RADAR') {
+        let simXpos = Math.floor(mouseXinSim * sim_res_x);
+        let simYpos = findSimYposAboveSurfaceAtMouseX();
+
+        if (simXpos >= 0 && simXpos < sim_res_x)
+          radarTowers.push(new RadarTower(simXpos, simYpos));
+        radarNeedsMeasure = true;
       }
     } else if (e.button == 1) {
       // middle mouse button
@@ -4758,11 +4938,18 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         for (i = 0; i < weatherStations.length; i++) {
           weatherStations[i].setHidden(true);
         }
+        for (i = 0; i < radarTowers.length; i++) {
+          radarTowers[i].setHidden(true);
+        }
       } else {
         displayWeatherStations = true;
         for (i = 0; i < weatherStations.length; i++) {
           weatherStations[i].setHidden(false);
         }
+        for (i = 0; i < radarTowers.length; i++) {
+          radarTowers[i].setHidden(false);
+        }
+        radarNeedsMeasure = true;
       }
 
       if (guiControls.tool == 'TOOL_STATION') // prevent placing weather stations when not visible
@@ -4854,6 +5041,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   const dispVertexShader = await loadShader('dispShader.vert');
   const realDispVertexShader = await loadShader('realDispShader.vert');
   const precipDisplayVertexShader = await loadShader('precipDisplayShader.vert');
+  const precipPhaseAccumVertexShader = await loadShader('precipPhaseAccum.vert');
   const postProcessingVertexShader = await loadShader('postProcessingShader.vert');
 
   const pressureShader = await loadShader('pressureShader.frag');
@@ -4872,6 +5060,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   const temperatureDisplayShader = await loadShader('temperatureDisplayShader.frag');
   const airQualityDisplayShader = await loadShader('airQualityDisplayShader.frag');
   const precipDisplayShader = await loadShader('precipDisplayShader.frag');
+  const precipPhaseAccumShader = await loadShader('precipPhaseAccum.frag');
   const universalDisplayShader = await loadShader('universalDisplayShader.frag');
   const skyBackgroundDisplayShader = await loadShader('skyBackgroundDisplayShader.frag');
   const realisticDisplayShader = await loadShader('realisticDisplayShader.frag');
@@ -4899,6 +5088,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   const temperatureDisplayProgram = createProgram(dispVertexShader, temperatureDisplayShader);
   const airQualityDisplayProgram = createProgram(dispVertexShader, airQualityDisplayShader);
   const precipDisplayProgram = createProgram(precipDisplayVertexShader, precipDisplayShader);
+  const precipPhaseAccumProgram = createProgram(precipPhaseAccumVertexShader, precipPhaseAccumShader);
   const universalDisplayProgram = createProgram(dispVertexShader, universalDisplayShader);
   const skyBackgroundDisplayProgram = createProgram(realDispVertexShader, skyBackgroundDisplayShader);
   const realisticDisplayProgram = createProgram(realDispVertexShader, realisticDisplayShader);
@@ -5302,6 +5492,11 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   const baseTexture_1 = gl.createTexture();
   const waterTexture_0 = gl.createTexture();
   const waterTexture_1 = gl.createTexture();
+  const reflectivitySnapshotTex = gl.createTexture();
+  const phaseTexture = gl.createTexture();           // liquid/ice sums
+  const phaseStatsTexture = gl.createTexture();      // density sums
+  const phaseSnapshotTex = gl.createTexture();
+  const phaseStatsSnapshotTex = gl.createTexture();
   const wallTexture_0 = gl.createTexture();
   const wallTexture_1 = gl.createTexture();
 
@@ -5313,6 +5508,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   const precipitationFeedbackTexture = gl.createTexture();
   const precipitationDepositionTexture = gl.createTexture();
   const lightningDataTexture = gl.createTexture(); // single pixel texture holding location and timing of current lightning strike
+  let phaseAccumProgram;
 
   // Static texures:
   const noiseTexture = gl.createTexture();
@@ -5327,13 +5523,16 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
 
   frameBuff_0 = gl.createFramebuffer(); // global for weather stations
-  const frameBuff_1 = gl.createFramebuffer();
+  frameBuff_1 = gl.createFramebuffer();
 
   const curlFrameBuff = gl.createFramebuffer();
   const vortForceFrameBuff = gl.createFramebuffer();
 
   lightFrameBuff_0 = gl.createFramebuffer();
   const lightFrameBuff_1 = gl.createFramebuffer();
+  reflectivitySnapshotFBO = gl.createFramebuffer();
+  const phaseFrameBuff = gl.createFramebuffer();
+  const phaseSnapshotFBO = gl.createFramebuffer();
   const precipitationFeedbackFrameBuff = gl.createFramebuffer();
   const lightningDataFrameBuff = gl.createFramebuffer();
 
@@ -5381,6 +5580,34 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     // gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
+    // cache for radar refresh (RGBA32F to hold precipitation mass and extras)
+    gl.bindTexture(gl.TEXTURE_2D, reflectivitySnapshotTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+    // live phase (water/ice sums)
+    gl.bindTexture(gl.TEXTURE_2D, phaseTexture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+    // live density stats (sum, sumSq, count)
+    gl.bindTexture(gl.TEXTURE_2D, phaseStatsTexture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+    gl.bindTexture(gl.TEXTURE_2D, phaseSnapshotTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+    gl.bindTexture(gl.TEXTURE_2D, phaseStatsSnapshotTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
 
     lastSaveTime = new Date();
   }
@@ -5388,6 +5615,27 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   setupTextures();
 
   createAmbientLightFBOs();
+
+  function refreshReflectivitySnapshot(now)
+  {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, frameBuff_1);
+    gl.readBuffer(gl.COLOR_ATTACHMENT1); // waterTexture_1
+    gl.bindTexture(gl.TEXTURE_2D, reflectivitySnapshotTex);
+    gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, sim_res_x, sim_res_y);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, phaseFrameBuff);
+    gl.readBuffer(gl.COLOR_ATTACHMENT0);
+    gl.bindTexture(gl.TEXTURE_2D, phaseSnapshotTex);
+    gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, sim_res_x, sim_res_y);
+    gl.readBuffer(gl.COLOR_ATTACHMENT1);
+    gl.bindTexture(gl.TEXTURE_2D, phaseStatsSnapshotTex);
+    gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, sim_res_x, sim_res_y);
+    lastReflectivitySnapshotTime = now;
+    radarNeedsMeasure = true; // trigger radar updates after new snapshot
+  }
+
+  // initialize snapshot immediately so first render has valid data
+  refreshReflectivitySnapshot(performance.now ? performance.now() : 0);
 
   // Set up Framebuffers
 
@@ -5402,6 +5650,17 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, baseTexture_1, 0);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, waterTexture_1, 0);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT2, gl.TEXTURE_2D, wallTexture_1, 0);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, reflectivitySnapshotFBO);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, reflectivitySnapshotTex, 0);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, phaseFrameBuff);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, phaseTexture, 0);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, phaseStatsTexture, 0);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, phaseSnapshotFBO);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, phaseSnapshotTex, 0);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, phaseStatsSnapshotTex, 0);
 
 
   gl.bindTexture(gl.TEXTURE_2D, curlTexture);
@@ -5743,6 +6002,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   gl.uniform2f(gl.getUniformLocation(universalDisplayProgram, 'texelSize'), texelSizeX, texelSizeY);
   gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'anyTex'), 0);
   gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'wallTex'), 2);
+  gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'snapshotTex'), 4);
+  gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'phaseTex'), 5);
+  gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'phaseStatsTex'), 6);
 
   gl.useProgram(realisticDisplayProgram);
   gl.uniform2f(gl.getUniformLocation(realisticDisplayProgram, 'resolution'), sim_res_x, sim_res_y);
@@ -5947,6 +6209,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
             soundingProbeNeedsRedraw = true;
           }
           inputType = -1; // don't inject into sim
+        } else if (guiControls.tool == 'TOOL_RADAR') {
+          inputType = -1; // radar placement shouldn't paint into sim
         }
 
         var intensity = guiControls.brushIntensity;
@@ -6141,6 +6405,19 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
               gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
               gl.disable(gl.BLEND);
+
+              // accumulate liquid/ice phase per cell for radar rhohv
+              gl.bindFramebuffer(gl.FRAMEBUFFER, phaseFrameBuff);
+              gl.viewport(0, 0, sim_res_x, sim_res_y);
+              gl.clearColor(0.0, 0.0, 0.0, 0.0);
+              gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+              gl.enable(gl.BLEND);
+              gl.blendFunc(gl.ONE, gl.ONE);
+              gl.useProgram(precipPhaseAccumProgram);
+              gl.bindVertexArray(destVAO); // latest droplet state
+              gl.drawBuffers([ gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1 ]);
+              gl.drawArrays(gl.POINTS, 0, NUM_DROPLETS);
+              gl.disable(gl.BLEND);
               gl.bindVertexArray(fluidVao); // set screenfilling rect again
 
 
@@ -6201,8 +6478,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     let cursorType = 1.0; // normal circular brush
     if (guiControls.wholeWidth) {
       cursorType = 2.0;   // cursor whole width brush
-    } else if (SETUP_MODE || (inputType <= 0 && !bPressed && (guiControls.tool == 'TOOL_NONE' || guiControls.tool == 'TOOL_STATION' || guiControls.tool == 'TOOL_SOUNDING'))) {
-      cursorType = 0;     // cursor off sig
+    } else if (SETUP_MODE || (inputType <= 0 && !bPressed &&
+               (guiControls.tool == 'TOOL_NONE' || guiControls.tool == 'TOOL_STATION' || guiControls.tool == 'TOOL_SOUNDING' || guiControls.tool == 'TOOL_RADAR'))) {
+      cursorType = 0;     // cursor off sig (no brush ring for station / radar placement)
     }
 
     gl.useProgram(postProcessingProgram);
@@ -6246,6 +6524,13 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     if (airplaneMode) {
       airplane.display();
+    }
+
+    // radar-like sweep: freeze reflectivity every user-defined interval
+    const nowMs = performance.now ? performance.now() : Date.now();
+    const refreshMs = Math.max(100.0, guiControls.reflectivityRefreshSec * 1000.0); // clamp to avoid zero/negative
+    if (nowMs - lastReflectivitySnapshotTime >= refreshMs) {
+      refreshReflectivitySnapshot(nowMs);
     }
 
     // Reflectivity debug readout
@@ -6610,9 +6895,16 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         case 'DISP_REFLECTIVITY':
           gl.activeTexture(gl.TEXTURE0);
           gl.bindTexture(gl.TEXTURE_2D, waterTexture_1);
+          gl.activeTexture(gl.TEXTURE4);
+          gl.bindTexture(gl.TEXTURE_2D, reflectivitySnapshotTex);
+          gl.activeTexture(gl.TEXTURE5);
+          gl.bindTexture(gl.TEXTURE_2D, phaseSnapshotTex);
+          gl.activeTexture(gl.TEXTURE6);
+          gl.bindTexture(gl.TEXTURE_2D, phaseStatsSnapshotTex);
         gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'quantityIndex'), 2); // precipitation mass from waterTexture_1
         gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'dispMultiplier'), 1.0);
         gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'reflectivityMode'), 1);
+        gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'radarProduct'), guiControls.radarProduct == 'RADAR_RHOHV' ? 1 : 0);
         gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflMult'), guiControls.reflectivityGain); // user gain
         gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflBoost'), guiControls.reflectivityBoost);
         gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflPixelSize'), guiControls.reflectivityPixelSize);
@@ -6684,23 +6976,40 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflBoost'), guiControls.reflectivityBoost);
       gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflPixelSize'), guiControls.reflectivityPixelSize);
       gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'reflBackground'), guiControls.reflectivityBackground ? 1 : 0);
+      gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'radarProduct'), guiControls.radarProduct == 'RADAR_RHOHV' ? 1 : 0);
       gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'quantityIndex'), 2);
       gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'dispMultiplier'), 1.0);
 
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, waterTexture_1);
+      gl.activeTexture(gl.TEXTURE4);
+      gl.bindTexture(gl.TEXTURE_2D, reflectivitySnapshotTex);
+      gl.activeTexture(gl.TEXTURE5);
+      gl.bindTexture(gl.TEXTURE_2D, phaseSnapshotTex);
+      gl.activeTexture(gl.TEXTURE6);
+      gl.bindTexture(gl.TEXTURE_2D, phaseStatsSnapshotTex);
       gl.activeTexture(gl.TEXTURE2);
       gl.bindTexture(gl.TEXTURE_2D, wallTexture_1);
 
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       gl.disable(gl.BLEND);
-    }
+  }
 
-    if (displayWeatherStations) {
-      for (i = 0; i < weatherStations.length; i++) {
-        weatherStations[i].updateCanvas(); // update weather stations
-      }
+  if (displayWeatherStations) {
+    for (i = 0; i < weatherStations.length; i++) {
+      weatherStations[i].updateCanvas(); // update weather stations
     }
+    for (i = 0; i < radarTowers.length; i++) {
+      radarTowers[i].updateCanvas(); // keep position synced with camera
+    }
+  }
+  if (displayWeatherStations && radarNeedsMeasure && radarTowers.length > 0) {
+    const nowRadar = performance.now ? performance.now() : Date.now();
+    for (i = 0; i < radarTowers.length; i++) {
+      radarTowers[i].measure(nowRadar);
+    }
+    radarNeedsMeasure = false;
+  }
 
     frameNum++;
     requestAnimationFrame(draw);
@@ -7010,4 +7319,3 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     }
   }
 } // end of mainscript
-
