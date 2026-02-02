@@ -1649,6 +1649,46 @@ function setLoadingBar()
 }
 
 var soundingData;
+var soundingDiagnostics = {
+  cape : null,
+  mlCape : null,
+  sbCape : null,
+  cape03 : null,
+  cin : null,
+};
+
+function updateSoundingDiagnosticsUI()
+{
+  const formatVal = (v) => Number.isFinite(v) ? Math.round(v) : '--';
+  const ids = {
+    cape : 'capeVal',
+    mlCape : 'mlCapeVal',
+    sbCape : 'sbCapeVal',
+    cape03 : 'cape03Val',
+    cin : 'cinVal',
+  };
+
+  for (const [key, id] of Object.entries(ids)) {
+    const el = document.getElementById(id);
+    if (el)
+      el.textContent = formatVal(soundingDiagnostics[key]);
+  }
+}
+
+function resizeSoundingCanvas()
+{
+  const wrapper = document.getElementById('soundingGraphWrapper');
+  const canvas = document.getElementById('graphCanvas');
+  if (!wrapper || !canvas)
+    return;
+
+  const width = wrapper.clientWidth || Math.min(window.innerWidth, 760);
+  const availableHeight = wrapper.clientHeight ? (wrapper.clientHeight - 16) : (window.innerHeight - 120);
+  const height = Math.max(420, Math.min(availableHeight, width, window.innerHeight - 120));
+
+  canvas.width = width;
+  canvas.height = height;
+}
 
 async function prepareSounding()
 {
@@ -4128,14 +4168,19 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     ctx : null,
     init : function() {
       this.graphCanvas = document.getElementById('graphCanvas');
-      this.graphCanvas.height = window.innerHeight;
-      this.graphCanvas.width = this.graphCanvas.height;
+      resizeSoundingCanvas();
       this.ctx = this.graphCanvas.getContext('2d');
       var style = this.graphCanvas.style;
-      if (guiControls.showGraph)
+      const panelEl = document.getElementById('soundingPanel');
+      if (guiControls.showGraph) {
         style.display = 'block';
-      else
+        if (panelEl)
+          panelEl.style.display = 'flex';
+      } else {
         style.display = 'none';
+        if (panelEl)
+          panelEl.style.display = 'none';
+      }
     },
     draw : function(simXpos, simYpos) {
       // draw graph
@@ -4165,6 +4210,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       c.fillRect(0, 0, graphCanvas.width, graphCanvas.height);
 
       drawIsotherms();
+      drawHeightLabels();
 
       var reachedAir = false;
       var surfaceLevel;
@@ -4439,27 +4485,12 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         mlEnergy = integrateParcelEnergies(surfaceLevel, water, initialTemperature);
       }
 
-      // place diagnostics near top-right, left of wind barbs/profile
-      c.font = '18px Arial';
-      c.fillStyle = 'white';
-      var diagX = this.graphCanvas.width - 230; // keep clear of wind profile drawn near right edge
-      var diagLine = 0;
-      if (guiControls.showCAPE) {
-        c.fillText('CAPE: ' + Math.round(cape) + ' J/kg', diagX, 25 + diagLine * 20);
-        diagLine++;
-      }
-      if (guiControls.showCIN) {
-        c.fillText('CIN : ' + Math.round(cin) + ' J/kg', diagX, 25 + diagLine * 20);
-        diagLine++;
-      }
-      if (guiControls.showMLCAPE) {
-        c.fillText('MLCAPE: ' + Math.round(mlEnergy.cape) + ' J/kg', diagX, 25 + diagLine * 20);
-        diagLine++;
-      }
-      if (guiControls.showCAPE03) {
-        c.fillText('0-3 km CAPE: ' + Math.round(cape03) + ' J/kg', diagX, 25 + diagLine * 20);
-        diagLine++;
-      }
+      soundingDiagnostics.cape = cape;
+      soundingDiagnostics.sbCape = cape;
+      soundingDiagnostics.cape03 = cape03;
+      soundingDiagnostics.cin = cin;
+      soundingDiagnostics.mlCape = mlEnergy.cape;
+      updateSoundingDiagnosticsUI();
 
 
       c.fillText('' + printDistance(map_range(simXpos, 0, sim_res_y, 0, guiControls.simHeight)), this.graphCanvas.width - 70, 20);
@@ -4494,9 +4525,29 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         c.lineWidth = 3.0;
         c.stroke();
       }
+
+      function drawHeightLabels()
+      {
+        c.font = '14px Arial';
+        c.fillStyle = 'rgba(255,255,255,0.8)';
+        c.strokeStyle = 'rgba(255,255,255,0.25)';
+        c.lineWidth = 1.0;
+
+        const stepM = 1000; // 1 km
+        for (let m = 0; m <= guiControls.simHeight; m += stepM) {
+          const yIndex = (m / guiControls.simHeight) * sim_res_y;
+          const scrYpos = map_range(yIndex, sim_res_y, 0, 0, graphBottem);
+          c.beginPath();
+          c.moveTo(8, scrYpos);
+          c.lineTo(24, scrYpos);
+          c.stroke();
+          c.fillText((m / 1000).toFixed(0) + ' km', 30, scrYpos + 5);
+        }
+      }
     }, // end of draw()
   };
   soundingGraph.init();
+  updateSoundingDiagnosticsUI();
 
   await loadingBar.set(6, 'Setting up eventlisteners');
   // END OF GRAPH
@@ -4523,8 +4574,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     canvas.height = window.innerHeight;
     canvas_aspect = canvas.width / canvas.height;
 
-    soundingGraph.graphCanvas.height = window.innerHeight;
-    soundingGraph.graphCanvas.width = window.innerHeight;
+    resizeSoundingCanvas();
 
     // Render output framebuffers need to match canvas resolution
     createBloomFBOs(); // recreate bloom framebuffers
@@ -7019,11 +7069,17 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   function hideOrShowGraph()
   {
+    const panelEl = document.getElementById('soundingPanel');
     if (guiControls.showGraph) {
-      soundingGraph.graphCanvas.style.display = 'block';
+      if (soundingGraph.graphCanvas)
+        soundingGraph.graphCanvas.style.display = 'block';
+      if (panelEl)
+        panelEl.style.display = 'flex';
+      resizeSoundingCanvas();
       soundingProbeNeedsRedraw = true;
     } else {
-      soundingGraph.graphCanvas.style.display = 'none';
+      if (panelEl)
+        panelEl.style.display = 'none';
     }
   }
 
