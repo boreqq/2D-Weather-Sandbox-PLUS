@@ -1477,6 +1477,134 @@ function setLoadingBar()
 }
 
 var soundingData;
+var soundingDiagnostics = {
+  tempC : null,
+  dewC : null,
+  rh : null,
+  cape : null,
+  mlCape : null,
+  sbCape : null,
+  cape03 : null,
+  pwat : null,
+  cin : null,
+  mlCin : null,
+  lr03 : null,
+  lr36 : null,
+  lcl : null,
+};
+
+// Ensure the sounding panel HTML exists (created dynamically so it's not in the intro DOM)
+function ensureSoundingPanel()
+{
+  if (document.getElementById('soundingPanel'))
+    return;
+
+  const panelHtml = `
+    <div id="soundingPanel" class="sounding-panel" style="display:none;">
+      <div class="sounding-panel__header">
+        <h3 class="sounding-panel__title">Sounding View</h3>
+        <div class="sounding-panel__meta" id="soundingMeta">Live CAPE/CIN values for current probe</div>
+      </div>
+      <div class="sounding-graph-wrapper" id="soundingGraphWrapper">
+        <canvas id="graphCanvas"></canvas>
+      </div>
+      <div class="sounding-tables">
+        <div class="sounding-table">
+          <table>
+            <thead>
+              <tr>
+                <th>TEMP. (°C)</th>
+                <th>DEW POINT (°C)</th>
+                <th>SURFACE RH (%)</th>
+                <th>CAPE (J/kg)</th>
+                <th>MLCAPE (J/kg)</th>
+                <th>MUCAPE (J/kg)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td id="tempVal">--</td>
+                <td id="dewVal">--</td>
+                <td id="rhVal">--</td>
+                <td id="capeVal">--</td>
+                <td id="mlCapeVal">--</td>
+                <td id="sbCapeVal">--</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="sounding-table">
+          <table>
+            <thead>
+              <tr>
+                <th>CIN (J/kg)</th>
+                <th>MLCIN (J/kg)</th>
+                <th>0-3 km LR (°C/km)</th>
+                <th>3-6 km LR (°C/km)</th>
+                <th>0-6 LCL (m)</th>
+                <th>PWAT (mm)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td id="cinVal">--</td>
+                <td id="mlCinVal">--</td>
+                <td id="lr03Val">--</td>
+                <td id="lr36Val">--</td>
+                <td id="lclVal">--</td>
+                <td id="pwatVal">--</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>`;
+
+  const container = document.createElement('div');
+  container.innerHTML = panelHtml.trim();
+  document.body.appendChild(container.firstChild);
+}
+
+function updateSoundingDiagnosticsUI()
+{
+  const formatVal = (v) => Number.isFinite(v) ? Math.round(v) : '--';
+  const ids = {
+    tempC : 'tempVal',
+    dewC : 'dewVal',
+    rh : 'rhVal',
+    cape : 'capeVal',
+    mlCape : 'mlCapeVal',
+    sbCape : 'sbCapeVal',
+    pwat : 'pwatVal',
+    cin : 'cinVal',
+    mlCin : 'mlCinVal',
+    lr03 : 'lr03Val',
+    lr36 : 'lr36Val',
+    lcl : 'lclVal',
+  };
+
+  for (const [key, id] of Object.entries(ids)) {
+    const el = document.getElementById(id);
+    if (el)
+      el.textContent = formatVal(soundingDiagnostics[key]);
+  }
+}
+
+function resizeSoundingCanvas()
+{
+  ensureSoundingPanel();
+  const wrapper = document.getElementById('soundingGraphWrapper');
+  const canvas = document.getElementById('graphCanvas');
+  if (!wrapper || !canvas)
+    return;
+
+  const width = wrapper.clientWidth || Math.min(window.innerWidth, 760);
+  const availableHeight = wrapper.clientHeight ? (wrapper.clientHeight - 16) : (window.innerHeight - 120);
+  const height = Math.max(420, Math.min(availableHeight, width, window.innerHeight - 120));
+
+  canvas.width = width;
+  canvas.height = height;
+}
 
 async function prepareSounding()
 {
@@ -3919,7 +4047,78 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     }
   }
 
-  var soundingGraph = {
+function ensureSoundingPanel()
+{
+  if (document.getElementById('soundingPanel'))
+    return;
+
+  const panelHtml = `
+    <div id="soundingPanel" class="sounding-panel" style="display:none;">
+      <div class="sounding-panel__header">
+        <h3 class="sounding-panel__title">Sounding View</h3>
+        <div class="sounding-panel__meta" id="soundingMeta">Live CAPE/CIN values for current probe</div>
+      </div>
+      <div class="sounding-graph-wrapper" id="soundingGraphWrapper">
+        <canvas id="graphCanvas"></canvas>
+      </div>
+      <div class="sounding-tables">
+        <div class="sounding-table">
+          <table>
+            <thead>
+              <tr>
+                <th>TEMP. (°C)</th>
+                <th>DEW POINT (°C)</th>
+                <th>SURFACE RH (%)</th>
+                <th>CAPE (J/kg)</th>
+                <th>MLCAPE (J/kg)</th>
+                <th>MUCAPE (J/kg)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td id="tempVal">--</td>
+                <td id="dewVal">--</td>
+                <td id="rhVal">--</td>
+                <td id="capeVal">--</td>
+                <td id="mlCapeVal">--</td>
+                <td id="sbCapeVal">--</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="sounding-table">
+          <table>
+            <thead>
+              <tr>
+                <th>CIN (J/kg)</th>
+                <th>MLCIN (J/kg)</th>
+                <th>0-3 km LR (°C/km)</th>
+                <th>3-6 km LR (°C/km)</th>
+                <th>0-6 LCL (m)</th>
+                <th>PWAT (mm)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td id="cinVal">--</td>
+                <td id="mlCinVal">--</td>
+                <td id="lr03Val">--</td>
+                <td id="lr36Val">--</td>
+                <td id="lclVal">--</td>
+                <td id="pwatVal">--</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>`;
+
+  const container = document.createElement('div');
+  container.innerHTML = panelHtml.trim();
+  document.body.appendChild(container.firstChild);
+}
+
+var soundingGraph = {
     graphCanvas : null,
     ctx : null,
     init : function() {
@@ -4152,6 +4351,166 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         c.strokeStyle = '#008800';
 
       c.stroke();
+
+      // --- Additional parcel diagnostics: CIN, MLCAPE, 0-3 km CAPE ---
+      function integrateParcelEnergies(startY, parcelWater, parcelTempK)
+      {
+        var prevT = parcelTempK;
+        var prevCloud = Math.max(parcelWater - maxWater(prevT), 0.0);
+        var localCape = 0.0;
+        var localCin = 0.0;
+        var localCape03 = 0.0;
+        var positiveReachedLocal = false;
+        var negAfterPos = 0;
+        const negLimit = 8; // require sustained negative buoyancy before terminating (reduces pixel-to-pixel jumps)
+
+        for (var yy = startY + 1; yy < sim_res_y; yy++) {
+          var dTlocal = drylapsePerCell;
+          var cloudLocal = Math.max(parcelWater - maxWater(prevT + dTlocal), 0.0);
+          var dWtLocal = (cloudLocal - prevCloud) * guiControls.evapHeat;
+          var actualChange = dT_saturated(dTlocal, dWtLocal);
+          var parcelTk = prevT + actualChange;
+
+          prevT = parcelTk;
+          prevCloud = Math.max(parcelWater - maxWater(prevT), 0.0);
+
+          if (wallTextureValues[4 * yy + 1] != 0) {
+            var envTk = baseTextureValues[4 * yy + 3] - ((yy / sim_res_y) * guiControls.simHeight * guiControls.dryLapseRate) / 1000.0;
+            var buoy = (parcelTk - envTk) / envTk;
+            if (buoy > 0.0) {
+              positiveReachedLocal = true;
+              negAfterPos = 0; // reset negative counter once buoyancy is positive again
+              localCape += buoy * g * cellHeightLocal;
+              if (((yy - surfaceLevel) * cellHeightLocal) <= 3000.0) {
+                localCape03 += buoy * g * cellHeightLocal;
+              }
+            } else if (!positiveReachedLocal) {
+              localCin += (-buoy) * g * cellHeightLocal;
+            } else {
+              negAfterPos++;
+              if (negAfterPos >= negLimit)
+                break; // stop only after sustained negative buoyancy
+            }
+          }
+        }
+        return {cape: localCape, cin: localCin, cape03: localCape03};
+      }
+
+      // mixed-layer (0-1 km) parcel using potential temperature (theta) and vapor mixing ratio (qv)
+      const mlDepth = 1000.0; // meters
+      let mlSumTheta = 0.0;
+      let mlSumQv = 0.0;
+      let mlCount = 0;
+      for (var yy = surfaceLevel; yy < sim_res_y && ((yy - surfaceLevel) * cellHeightLocal) <= mlDepth; yy++) {
+        if (wallTextureValues[4 * yy + 1] == 0) continue; // skip non-fluid
+        const theta = baseTextureValues[4 * yy + 3];          // stored as potential temperature (K)
+        const qv = Math.max(waterTextureValues[4 * yy + 0], 0.0); // vapor only (channel 0)
+        mlSumTheta += theta;
+        mlSumQv += qv;
+        mlCount++;
+      }
+      const mlTheta = mlCount > 0 ? mlSumTheta / mlCount : baseTextureValues[4 * surfaceLevel + 3];
+      const mlQv = mlCount > 0 ? mlSumQv / mlCount : water;
+
+      // convert theta back to actual temperature at surface-level height
+      const mlInitTemp = potentialToRealT(mlTheta, surfaceLevel);
+      const mlWater = mlQv;
+
+      // calculate mixed-layer energies
+      var mlEnergy = integrateParcelEnergies(surfaceLevel, mlWater, mlInitTemp);
+      // soften the fallback only if ML is unrealistically small vs surface
+      if (mlEnergy.cape < 0.1 * cape && cape > 50.0) {
+        const blend = 0.5;
+        var surfEnergy = integrateParcelEnergies(surfaceLevel, water, initialTemperature);
+        mlEnergy.cape = mlEnergy.cape * (1 - blend) + surfEnergy.cape * blend;
+        mlEnergy.cin = mlEnergy.cin * (1 - blend) + surfEnergy.cin * blend;
+      }
+
+      // precipitable water (PWAT) integrated hydrostatically using Td-derived qv
+      function computePWATmm(surfaceLevel, topMeters = 12000.0)
+      {
+        const Rd = 287.05;   // J/(kg*K)
+        const rhoW = 1000.0; // kg/m^3
+        let p_hPa = 1013.25; // starting surface pressure (hPa)
+        let pw_kg_m2 = 0.0;
+        const maxCells = Math.min(sim_res_y - 1, surfaceLevel + Math.floor(topMeters / cellHeightLocal));
+
+        const satVaporPressure = (Tc) => 6.112 * Math.exp((17.67 * Tc) / (Tc + 243.5)); // hPa
+        const mixingRatioFromTd = (TdC, p_hPa_local) => {
+          const e = satVaporPressure(TdC);
+          return 0.622 * e / Math.max(p_hPa_local - e, 1e-3); // kg/kg
+        };
+
+        for (let yy = surfaceLevel; yy <= maxCells; yy++) {
+          if (wallTextureValues[4 * yy + 1] == 0) continue;
+          const envTk = baseTextureValues[4 * yy + 3] - ((yy / sim_res_y) * guiControls.simHeight * guiControls.dryLapseRate) / 1000.0;
+          const TdK = dewpoint(waterTextureValues[4 * yy + 0]);
+          const qv = mixingRatioFromTd(TdK - 273.15, p_hPa); // kg/kg from Td
+          const rho = (p_hPa * 100) / (Rd * envTk);
+          const dz = cellHeightLocal;
+          pw_kg_m2 += rho * qv * dz;
+          p_hPa *= Math.exp((-g * dz) / (Rd * envTk));
+        }
+        return (pw_kg_m2 / rhoW) * 1000.0; // mm
+      }
+
+      const pwatMm = computePWATmm(surfaceLevel, guiControls.simHeight);
+
+      // --- Most-unstable CAPE (MU) in lowest 3 km ---
+      var muEnergy = {cape: 0.0, cin: 0.0};
+      var maxCape = -1.0;
+      const muTopMeters = 3000.0;
+      const maxMuY = Math.min(sim_res_y - 1, Math.floor(surfaceLevel + muTopMeters / cellHeightLocal));
+      for (var yy = surfaceLevel; yy <= maxMuY; yy++) {
+        if (wallTextureValues[4 * yy + 1] == 0) continue;
+        const thetaMu = baseTextureValues[4 * yy + 3];
+        const qvMu = Math.max(waterTextureValues[4 * yy + 0], 0.0);
+        const tempMu = potentialToRealT(thetaMu, yy);
+        const energy = integrateParcelEnergies(yy, qvMu, tempMu);
+        if (energy.cape > maxCape) {
+          maxCape = energy.cape;
+          muEnergy = energy;
+        }
+      }
+
+      function envTempAtHeight(meters)
+      {
+        const yIdx = Math.min(sim_res_y - 1, Math.max(surfaceLevel, Math.round(surfaceLevel + meters / cellHeightLocal)));
+        const envTempK = baseTextureValues[4 * yIdx + 3] - ((yIdx / sim_res_y) * guiControls.simHeight * guiControls.dryLapseRate) / 1000.0;
+        return KtoC(envTempK);
+      }
+
+      let lr03 = null, lr36 = null;
+      if (guiControls.simHeight >= 3000) {
+        const t0 = envTempAtHeight(0);
+        const t3 = envTempAtHeight(3000);
+        lr03 = (t0 - t3) / 3.0;
+      }
+      if (guiControls.simHeight >= 6000) {
+        const t3 = envTempAtHeight(3000);
+        const t6 = envTempAtHeight(6000);
+        lr36 = (t3 - t6) / 3.0;
+      }
+
+      let lclMeters = null;
+      if (surfaceTempC != null && surfaceDewC != null) {
+        lclMeters = Math.max(0, 125.0 * (surfaceTempC - surfaceDewC));
+      }
+
+      soundingDiagnostics.cape = cape;
+      soundingDiagnostics.sbCape = muEnergy.cape; // now MU CAPE
+      soundingDiagnostics.cape03 = cape03;
+      soundingDiagnostics.cin = cin;
+      soundingDiagnostics.mlCape = mlEnergy.cape;
+      soundingDiagnostics.mlCin = mlEnergy.cin;
+      soundingDiagnostics.pwat = pwatMm;
+      soundingDiagnostics.tempC = surfaceTempC;
+      soundingDiagnostics.dewC = surfaceDewC;
+      soundingDiagnostics.rh = surfaceRH;
+      soundingDiagnostics.lr03 = lr03;
+      soundingDiagnostics.lr36 = lr36;
+      soundingDiagnostics.lcl = lclMeters;
+      updateSoundingDiagnosticsUI();
 
 
       c.fillText('' + printDistance(map_range(simXpos, 0, sim_res_y, 0, guiControls.simHeight)), this.graphCanvas.width - 70, 20);
@@ -6783,3 +7142,4 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     }
   }
 } // end of mainscript
+
