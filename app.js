@@ -1658,6 +1658,7 @@ var soundingDiagnostics = {
   mlCape : null,
   sbCape : null,
   cape03 : null,
+  pwat : null,
   cin : null,
   mlCin : null,
   lr03 : null,
@@ -1714,7 +1715,7 @@ function ensureSoundingPanel()
                 <th>0-3 km LR (°C/km)</th>
                 <th>3-6 km LR (°C/km)</th>
                 <th>0-6 LCL (m)</th>
-                <th>0-3 km CAPE (J/kg)</th>
+                <th>PWAT (mm)</th>
               </tr>
             </thead>
             <tbody>
@@ -1724,7 +1725,7 @@ function ensureSoundingPanel()
                 <td id="lr03Val">--</td>
                 <td id="lr36Val">--</td>
                 <td id="lclVal">--</td>
-                <td id="cape03Val">--</td>
+                <td id="pwatVal">--</td>
               </tr>
             </tbody>
           </table>
@@ -1747,7 +1748,7 @@ function updateSoundingDiagnosticsUI()
     cape : 'capeVal',
     mlCape : 'mlCapeVal',
     sbCape : 'sbCapeVal',
-    cape03 : 'cape03Val',
+    pwat : 'pwatVal',
     cin : 'cinVal',
     mlCin : 'mlCinVal',
     lr03 : 'lr03Val',
@@ -4301,7 +4302,7 @@ function ensureSoundingPanel()
                 <th>0-3 km LR (°C/km)</th>
                 <th>3-6 km LR (°C/km)</th>
                 <th>0-6 LCL (m)</th>
-                <th>0-3 km CAPE (J/kg)</th>
+                <th>PWAT (mm)</th>
               </tr>
             </thead>
             <tbody>
@@ -4311,7 +4312,7 @@ function ensureSoundingPanel()
                 <td id="lr03Val">--</td>
                 <td id="lr36Val">--</td>
                 <td id="lclVal">--</td>
-                <td id="cape03Val">--</td>
+                <td id="pwatVal">--</td>
               </tr>
             </tbody>
           </table>
@@ -4691,6 +4692,36 @@ var soundingGraph = {
         mlEnergy.cin = mlEnergy.cin * (1 - blend) + surfEnergy.cin * blend;
       }
 
+      // precipitable water (PWAT) integrated hydrostatically using Td-derived qv
+      function computePWATmm(surfaceLevel, topMeters = 12000.0)
+      {
+        const Rd = 287.05;   // J/(kg*K)
+        const rhoW = 1000.0; // kg/m^3
+        let p_hPa = 1013.25; // starting surface pressure (hPa)
+        let pw_kg_m2 = 0.0;
+        const maxCells = Math.min(sim_res_y - 1, surfaceLevel + Math.floor(topMeters / cellHeightLocal));
+
+        const satVaporPressure = (Tc) => 6.112 * Math.exp((17.67 * Tc) / (Tc + 243.5)); // hPa
+        const mixingRatioFromTd = (TdC, p_hPa_local) => {
+          const e = satVaporPressure(TdC);
+          return 0.622 * e / Math.max(p_hPa_local - e, 1e-3); // kg/kg
+        };
+
+        for (let yy = surfaceLevel; yy <= maxCells; yy++) {
+          if (wallTextureValues[4 * yy + 1] == 0) continue;
+          const envTk = baseTextureValues[4 * yy + 3] - ((yy / sim_res_y) * guiControls.simHeight * guiControls.dryLapseRate) / 1000.0;
+          const TdK = dewpoint(waterTextureValues[4 * yy + 0]);
+          const qv = mixingRatioFromTd(TdK - 273.15, p_hPa); // kg/kg from Td
+          const rho = (p_hPa * 100) / (Rd * envTk);
+          const dz = cellHeightLocal;
+          pw_kg_m2 += rho * qv * dz;
+          p_hPa *= Math.exp((-g * dz) / (Rd * envTk));
+        }
+        return (pw_kg_m2 / rhoW) * 1000.0; // mm
+      }
+
+      const pwatMm = computePWATmm(surfaceLevel, guiControls.simHeight);
+
       // --- Most-unstable CAPE (MU) in lowest 3 km ---
       var muEnergy = {cape: 0.0, cin: 0.0};
       var maxCape = -1.0;
@@ -4738,6 +4769,7 @@ var soundingGraph = {
       soundingDiagnostics.cin = cin;
       soundingDiagnostics.mlCape = mlEnergy.cape;
       soundingDiagnostics.mlCin = mlEnergy.cin;
+      soundingDiagnostics.pwat = pwatMm;
       soundingDiagnostics.tempC = surfaceTempC;
       soundingDiagnostics.dewC = surfaceDewC;
       soundingDiagnostics.rh = surfaceRH;
@@ -7632,3 +7664,4 @@ var soundingGraph = {
     }
   }
 } // end of mainscript
+
