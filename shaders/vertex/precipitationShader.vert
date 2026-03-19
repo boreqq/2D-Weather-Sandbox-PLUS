@@ -2,14 +2,16 @@
 precision highp float;
 
 
-in vec2 dropPosition;
-in vec2 mass; //[0] water   [1] ice
-in float density;
+layout(location = 0) in vec2 dropPosition;
+layout(location = 1) in vec2 mass; //[0] water   [1] ice
+layout(location = 2) in float density;
+layout(location = 3) in float size;
 
 // transform feedback varyings:
 out vec2 position_out;
 out vec2 mass_out;
 out float density_out;
+out float size_out;
 
 // via fragmentshader to feedback framebuffers for feedback to fluid
 out vec4 feedback;
@@ -52,6 +54,7 @@ uniform float evapRate;           // 0.0005
 vec2 newPos;
 vec2 newMass;
 float newDensity;
+float newSize;
 
 bool isActive = true;
 bool spawned = false; // spawned in this iteration
@@ -61,6 +64,30 @@ void disableDroplet()
 {
   newMass[WATER] = -2. - dropPosition.x; // disable droplet by making it negative and save position as seed for respawning
   newMass[ICE] = dropPosition.y;         // save position as seed for random function when respawning later
+  newSize = 0.0;
+}
+
+float calcHydrometeorSize(vec2 hydromass, float hydrodensity)
+{
+  float liquid = max(hydromass[WATER], 0.0);
+  float ice = max(hydromass[ICE], 0.0);
+  float totalMass = liquid + ice;
+  if (totalMass <= 0.0)
+    return 0.0;
+
+  float iceFraction = ice / max(totalMass, 1e-6);
+  float bulkDensity = max((1.0 - iceFraction) + iceFraction * max(hydrodensity, 0.12), 0.08);
+  float baseSize = pow(totalMass / bulkDensity, 1.0 / 3.0);
+
+  float phaseScale = 1.0;
+  if (ice > 0.0) {
+    if (liquid <= 1e-6)
+      phaseScale = hydrodensity < 0.95 ? 1.55 - min(max(hydrodensity, 0.12), 0.9) * 0.35 : 0.95;
+    else
+      phaseScale = 1.05 + iceFraction * 0.25;
+  }
+
+  return baseSize * phaseScale;
 }
 
 void main()
@@ -68,6 +95,7 @@ void main()
   newPos = dropPosition;
   newMass = mass;         // amount of water and ice carried
   newDensity = density;   // determines fall speed
+  newSize = size;         // hydrometeor size proxy for radar moments
 
   if (mass[WATER] < 0.) { // inactive
                           /*
@@ -117,6 +145,7 @@ void main()
           newMass[ICE] = initalMass;                                     // snow
           feedback[HEAT] += newMass[ICE] * meltingHeat;                  // add heat of freezing
           newDensity = snowDensity;
+          newSize = calcHydrometeorSize(newMass, newDensity);
 
           vec4 lightningData = texture(lightningDataTex, vec2(0.5)); // data from last lightning bolt
 
@@ -142,6 +171,7 @@ void main()
           newMass[WATER] = initalMass; // rain
           newMass[ICE] = 0.0;
           newDensity = 1.0;
+          newSize = calcHydrometeorSize(newMass, newDensity);
         }
         feedback[VAPOR] -= initalMass;
       }
@@ -252,6 +282,12 @@ void main()
       feedback[HEAT] -= subli * evapHeat;
       feedback[HEAT] -= subli * meltingHeat;
 
+      float targetSize = calcHydrometeorSize(newMass, newDensity);
+      if (newSize <= 0.0 || spawned)
+        newSize = targetSize;
+      else
+        newSize = mix(newSize, targetSize, 0.35);
+
       // Update position
       // move with air    * 2. because droplet position goes from -1. to 1
       newPos += base.xy / resolution * 2.;
@@ -290,4 +326,5 @@ void main()
   position_out = newPos;
   mass_out = newMass;
   density_out = max(newDensity, 0.);
+  size_out = max(newSize, 0.);
 }
