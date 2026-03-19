@@ -340,7 +340,11 @@ const radToDeg = 57.2957795;
 const kmToMil = 0.62137;
 const mToFt = 3.28084;
 
-const saveFileVersionID = 263574036; // Uint32 id to check if save file is compatible
+const saveFileVersionID = 322531714;         // Uint32 id to check if save file is compatible
+const previousSaveFileVersionID = 263574036; // previous save format with 5 floats per droplet
+const legacySaveFileVersionID = 1939327491;  // older save format without embedded settings
+const valsPerDroplet = 6;
+const legacyValsPerDroplet = 5;
 
 const guiControls_default = {
   vorticity : 0.005,
@@ -611,6 +615,53 @@ function printSnowHeight(snowHeight_cm)
     return mmToIn(snowHeight_cm).toFixed(1) + '"'; // inches
   } else
     return snowHeight_cm.toFixed(1) + ' cm';
+}
+
+function calcHydrometeorSizeProxy(waterMass, iceMass, density)
+{
+  const liquid = Math.max(waterMass, 0.0);
+  const ice = Math.max(iceMass, 0.0);
+  const totalMass = liquid + ice;
+  if (totalMass <= 0.0)
+    return 0.0;
+
+  const iceFraction = ice / Math.max(totalMass, 1e-6);
+  const bulkDensity = Math.max((1.0 - iceFraction) + iceFraction * Math.max(density, 0.12), 0.08);
+  const baseSize = Math.pow(totalMass / bulkDensity, 1.0 / 3.0);
+
+  let phaseScale = 1.0;
+  if (ice > 0.0) {
+    if (liquid <= 1e-6)
+      phaseScale = density < 0.95 ? 1.55 - Math.min(Math.max(density, 0.12), 0.9) * 0.35 : 0.95;
+    else
+      phaseScale = 1.05 + iceFraction * 0.25;
+  }
+
+  return baseSize * phaseScale;
+}
+
+function upgradeLegacyPrecipArray(legacyPrecipArray)
+{
+  if (legacyPrecipArray.length % legacyValsPerDroplet != 0)
+    return legacyPrecipArray;
+
+  const legacyDropletCount = legacyPrecipArray.length / legacyValsPerDroplet;
+  const upgraded = new Float32Array(legacyDropletCount * valsPerDroplet);
+  for (let i = 0; i < legacyDropletCount; i++) {
+    const legacyOffset = i * legacyValsPerDroplet;
+    const upgradedOffset = i * valsPerDroplet;
+    const waterMass = legacyPrecipArray[legacyOffset + 2];
+    const iceMass = legacyPrecipArray[legacyOffset + 3];
+    const density = legacyPrecipArray[legacyOffset + 4];
+
+    upgraded[upgradedOffset + 0] = legacyPrecipArray[legacyOffset + 0];
+    upgraded[upgradedOffset + 1] = legacyPrecipArray[legacyOffset + 1];
+    upgraded[upgradedOffset + 2] = waterMass;
+    upgraded[upgradedOffset + 3] = iceMass;
+    upgraded[upgradedOffset + 4] = density;
+    upgraded[upgradedOffset + 5] = waterMass >= 0.0 ? calcHydrometeorSizeProxy(waterMass, iceMass, density) : 0.0;
+  }
+  return upgraded;
 }
 
 function printSoilMoisture(soilMoisture_mm)
@@ -1249,6 +1300,161 @@ class Weatherstation
   }
 }
 
+class RadarTower
+{
+  #width = 120;
+  #height = 70;
+  #mainDiv;
+  #canvas;
+  #ctx;
+  #x;
+  #y;
+  #rangeMeters = 100000.0; // 100 km default range
+  #lastMeasureMs = -Infinity;
+  _tmpPixel;
+  _tmpWall;
+  maxDbz = -999.0;
+
+  constructor(xIn, yIn)
+  {
+    this.#x = Math.floor(xIn);
+    this.#y = Math.floor(yIn);
+    this.#mainDiv = document.createElement('div');
+    this.#canvas = document.createElement('canvas');
+    this.#mainDiv.appendChild(this.#canvas);
+    document.body.appendChild(this.#mainDiv);
+    this.#canvas.height = this.#height;
+    this.#canvas.width = this.#width;
+
+    this.#mainDiv.style.position = 'absolute';
+    this.#mainDiv.style.width = '0px';
+    this.#mainDiv.style.height = '0px';
+
+    this.#ctx = this.#canvas.getContext('2d');
+
+    this.#canvas.style.position = 'absolute';
+    this.#canvas.style.zIndex = 1;
+
+    let self = this;
+    this.#canvas.addEventListener('mousedown', function(event) {
+      if (event.button == 0 && guiControls.tool == 'TOOL_RADAR') {
+        self.destroy();
+        event.stopPropagation();
+      }
+    });
+    this.#canvas.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+
+    this._tmpPixel = new Float32Array(4);
+    this._tmpWall = new Int8Array(4);
+    this.setHidden(false);
+  }
+
+  measure(nowMs)
+  {
+    const now = nowMs ?? (performance.now ? performance.now() : Date.now());
+    const minInterval = Math.max(16, guiControls.reflectivityRefreshSec * 1000.0);
+    if (now - this.#lastMeasureMs < minInterval) {
+      this.updateCanvas();
+      return;
+    }
+
+    // sample max dBZ within rangeMeters using coarse grid to avoid stutter
+    const rangeCells = Math.min(this.#rangeMeters / cellHeight, Math.min(sim_res_x, sim_res_y));
+    const sampleGrid = 25; // ~25 x 25 samples
+    const step = Math.max(8, Math.floor((rangeCells * 2) / sampleGrid));
+    const radius2 = rangeCells * rangeCells;
+    const minX = Math.max(0, Math.floor(this.#x - rangeCells));
+    const maxX = Math.min(sim_res_x - 1, Math.floor(this.#x + rangeCells));
+    const minY = Math.max(0, Math.floor(this.#y - rangeCells));
+    const maxY = Math.min(sim_res_y - 1, Math.floor(this.#y + rangeCells));
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, reflectivitySnapshotFBO);
+    gl.readBuffer(gl.COLOR_ATTACHMENT0); // reflectivitySnapshotTex
+
+    let maxDbzLocal = -999.0;
+    for (let yy = minY; yy <= maxY; yy += step) {
+      let dy = yy - this.#y;
+      for (let xx = minX; xx <= maxX; xx += step) {
+        let dx = xx - this.#x;
+        if (dx * dx + dy * dy > radius2)
+          continue;
+        gl.readPixels(xx, yy, 1, 1, gl.RGBA, gl.FLOAT, this._tmpPixel);
+        let zhLinear = Math.max(this._tmpPixel[0], 0.0);
+        if (zhLinear <= 0.0)
+          continue;
+
+        // skip ground/obstacle cells by checking wall texture
+        gl.bindFramebuffer(gl.FRAMEBUFFER, frameBuff_1);
+        gl.readBuffer(gl.COLOR_ATTACHMENT2); // wallTexture_1
+        gl.readPixels(xx, yy, 1, 1, gl.RGBA_INTEGER, gl.BYTE, this._tmpWall);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, reflectivitySnapshotFBO);
+        gl.readBuffer(gl.COLOR_ATTACHMENT0);
+        if (this._tmpWall[1] <= 0) // wall/ground -> ignore clutter
+          continue;
+
+        let z_raw = Math.sqrt(zhLinear) * guiControls.reflectivityGain + zhLinear * guiControls.reflectivityBoost;
+        let dbz = 10.0 * Math.log10(z_raw + 1e-6);
+        if (dbz > maxDbzLocal)
+          maxDbzLocal = dbz;
+      }
+    }
+    this.maxDbz = maxDbzLocal;
+    this.#lastMeasureMs = now;
+    this.updateCanvas();
+  }
+
+  updateCanvas()
+  {
+    let screenX = simToScreenX(this.#x) - this.#width / 2;
+    let screenY = simToScreenY(this.#y) - this.#height;
+
+    this.#mainDiv.style.left = screenX + 'px';
+    this.#mainDiv.style.top = screenY + 'px';
+
+    let c = this.#ctx;
+    c.clearRect(0, 0, this.#width, this.#height);
+    c.fillStyle = '#00000000';
+    c.fillRect(0, 0, this.#width, this.#height);
+
+    c.font = '15px Arial';
+    c.fillStyle = '#FFFFFF';
+    c.fillText('Radar Tower', 10, 15);
+
+    c.font = '12px Arial';
+    c.fillStyle = '#00FFFF';
+    c.fillText('Range: 100 km', 10, 30);
+
+    const hasEcho = this.maxDbz > -900;
+    c.font = '18px Arial';
+    c.fillStyle = hasEcho ? '#ffcc00' : '#cccccc';
+    c.fillText(hasEcho ? this.maxDbz.toFixed(1) + ' dBZ' : '-- dBZ', 10, 52);
+
+    // position pointer line (same style as weather station)
+    c.beginPath();
+    c.moveTo(this.#width / 2, this.#height * 0.80);
+    c.lineTo(this.#width / 2, this.#height);
+    c.strokeStyle = 'white';
+    c.stroke();
+  }
+
+  setHidden(hidden)
+  {
+    this.#mainDiv.style.display = hidden ? 'none' : 'block';
+  }
+
+  getXpos() { return this.#x; }
+  getYpos() { return this.#y; }
+
+  destroy()
+  {
+    if (this.#mainDiv && this.#mainDiv.parentNode)
+      this.#mainDiv.parentNode.removeChild(this.#mainDiv);
+    let idx = radarTowers.indexOf(this);
+    if (idx >= 0)
+      radarTowers.splice(idx, 1);
+  }
+}
+
 
 let weatherStations = []; // array holding all weather stations
 
@@ -1262,7 +1468,7 @@ async function loadData()
     let versionBuf = await versionBlob.arrayBuffer();
     let version = new Uint32Array(versionBuf)[0];                // convert to Uint32
 
-    if (version == saveFileVersionID || version == 1939327491) { // also allow previous version, settings will not be loaded
+    if (version == saveFileVersionID || version == previousSaveFileVersionID || version == legacySaveFileVersionID) {
       // check version id, only proceed if file has the right version id
       let fileArrBuf = await file.slice(4).arrayBuffer(); // slice from behind version id to
       // the end of the file
@@ -1311,13 +1517,17 @@ async function loadData()
       let wallTexBuf = await wallTexBlob.arrayBuffer();
       let wallTexI8 = new Int8Array(wallTexBuf);
 
+      const loadedValsPerDroplet = version == saveFileVersionID ? valsPerDroplet : legacyValsPerDroplet;
+
       sliceStart = sliceEnd;
-      sliceEnd += NUM_DROPLETS * Float32Array.BYTES_PER_ELEMENT * 5;
+      sliceEnd += NUM_DROPLETS * Float32Array.BYTES_PER_ELEMENT * loadedValsPerDroplet;
       let precipArrayBlob = dataBlob.slice(sliceStart, sliceEnd);
       let precipArrayBuf = await precipArrayBlob.arrayBuffer();
       let precipArray = new Float32Array(precipArrayBuf);
+      if (loadedValsPerDroplet != valsPerDroplet)
+        precipArray = upgradeLegacyPrecipArray(precipArray);
 
-      if (version == saveFileVersionID) {             // only load settings and weather stations from save file if it's the newest version with all the settings included
+      if (version == saveFileVersionID || version == previousSaveFileVersionID) {
         sliceStart = sliceEnd;
         sliceEnd += 1 * Int16Array.BYTES_PER_ELEMENT; // one 16 bit int indicates number of weather stations
         let numWeatherStationsArrayBlob = dataBlob.slice(sliceStart, sliceEnd);
@@ -1342,7 +1552,7 @@ async function loadData()
 
 
         guiControlsFromSaveFile = await settingsArrayBlob.text();
-      } else {
+      } else if (version == legacySaveFileVersionID) {
         alert('Save File from older version, settings will not be loaded');
       }
 
@@ -4012,6 +4222,28 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     datGui.add(guiControls, 'paused').onChange(handlePause).name('Paused').listen();
     datGui.add(guiControls, 'download').name('Save Simulation to File');
 
+    // Soundings tab at the bottom
+    var soundings_folder = datGui.addFolder('Soundings');
+    soundings_folder.add(guiControls, 'showGraph').onChange(hideOrShowGraph).name('Show Sounding Graph').listen();
+    soundings_folder.add(guiControls, 'soundingSmoothing').name('Smooth Sounding (±2 cols)').listen().onChange(() => { soundingProbeNeedsRedraw = true; });
+    soundings_folder.add(guiControls, 'showCAPE').name('Show CAPE').listen();
+    soundings_folder.add(guiControls, 'showCIN').name('Show CIN').listen();
+    soundings_folder.add(guiControls, 'showMLCAPE').name('Show MLCAPE').listen();
+    soundings_folder.add(guiControls, 'showCAPE03').name('Show 0-3 km CAPE').listen();
+
+    // Radar-specific controls
+    var radar_folder = datGui.addFolder('Radar');
+    radar_folder.add(guiControls, 'reflectivityBackground').name('Reflectivity Background').listen();
+    radar_folder.add(guiControls, 'debugReflectivity').name('Debug dBZ at cursor').listen();
+    radar_folder.add(guiControls, 'reflectivityPixelSize', 0.1, 32, 0.1).name('Reflectivity Pixel size').listen();
+    radar_folder.add(guiControls, 'reflectivityRefreshSec', 0.0, 10.0, 0.01)
+      .name('Radar refresh (s)')
+      .listen();
+    radar_folder.add(guiControls, 'radarProduct', {
+      'Reflectivity (dBZ)' : 'RADAR_REFLECTIVITY',
+      'Correlation Coefficient (ρhv)' : 'RADAR_RHOHV',
+    }).name('Radar Product');
+
     datGui.width = 400;
   }
 
@@ -5086,6 +5318,7 @@ var soundingGraph = {
   const lightingShader = await loadShader('lightingShader.frag');
 
   const lightningLocationShader = await loadShader('lightningLocationShader.frag');
+  const radarFieldUpdateShader = await loadShader('radarFieldUpdateShader.frag');
 
   const setupShader = await loadShader('setupShader.frag');
 
@@ -5113,6 +5346,7 @@ var soundingGraph = {
   const lightingProgram = createProgram(simVertexShader, lightingShader);
 
   const lightningLocationProgram = createProgram(simVertexShader, lightningLocationShader);
+  const radarFieldUpdateProgram = createProgram(simVertexShader, radarFieldUpdateShader);
 
   const setupProgram = createProgram(simVertexShader, setupShader);
 
@@ -5250,13 +5484,15 @@ var soundingGraph = {
 
   const precipitationVertexShader = await loadShader('precipitationShader.vert');
   const precipitationShader = await loadShader('precipitationShader.frag');
-  const precipitationProgram = createProgram(precipitationVertexShader, precipitationShader, [ 'position_out', 'mass_out', 'density_out' ]);
+  const precipitationProgram = createProgram(precipitationVertexShader, precipitationShader, [ 'position_out', 'mass_out', 'density_out', 'size_out' ]);
 
   gl.useProgram(precipitationProgram);
 
   const dropPositionAttribLocation = 0;
   const massAttribLocation = 1;
   const densityAttribLocation = 2;
+  const sizeAttribLocation = 3;
+  const dropletStrideBytes = valsPerDroplet * Float32Array.BYTES_PER_ELEMENT;
 
   var even = true; // used to switch between precipitation buffers
 
@@ -5281,6 +5517,7 @@ var soundingGraph = {
       rainDrops.push(-10.0 + Math.random()); // water negative to disable
       rainDrops.push(Math.random());         // ice
       rainDrops.push(Math.random());         // density
+      rainDrops.push(0.0);                   // size proxy
     }
   }
 
@@ -5290,15 +5527,16 @@ var soundingGraph = {
 
     gl.bindBuffer(gl.ARRAY_BUFFER, precipVertexBuffer_0);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(rainDrops), gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(positionAttribLocation);
+    gl.enableVertexAttribArray(dropPositionAttribLocation);
     gl.enableVertexAttribArray(massAttribLocation);
     gl.enableVertexAttribArray(densityAttribLocation);
+    gl.enableVertexAttribArray(sizeAttribLocation);
     gl.vertexAttribPointer(
       dropPositionAttribLocation,         // Attribute location
       2,                                  // Number of elements per attribute
       gl.FLOAT,                           // Type of elements
       gl.FALSE,
-      5 * Float32Array.BYTES_PER_ELEMENT, // Size of an individual vertex
+      dropletStrideBytes,                 // Size of an individual vertex
       0                                   // Offset from the beginning of a single vertex to this attribute
     );
     gl.vertexAttribPointer(
@@ -5306,7 +5544,7 @@ var soundingGraph = {
       2,                                  // Number of elements per attribute
       gl.FLOAT,                           // Type of elements
       gl.FALSE,
-      5 * Float32Array.BYTES_PER_ELEMENT, // Size of an individual vertex
+      dropletStrideBytes,                 // Size of an individual vertex
       2 * Float32Array.BYTES_PER_ELEMENT  // Offset from the beginning of a
       // single vertex to this attribute
     );
@@ -5315,8 +5553,17 @@ var soundingGraph = {
       1,                                  // Number of elements per attribute
       gl.FLOAT,                           // Type of elements
       gl.FALSE,
-      5 * Float32Array.BYTES_PER_ELEMENT, // Size of an individual vertex
+      dropletStrideBytes,                 // Size of an individual vertex
       4 * Float32Array.BYTES_PER_ELEMENT  // Offset from the beginning of a
+      // single vertex to this attribute
+    );
+    gl.vertexAttribPointer(
+      sizeAttribLocation,                 // Attribute location
+      1,                                  // Number of elements per attribute
+      gl.FLOAT,                           // Type of elements
+      gl.FALSE,
+      dropletStrideBytes,                 // Size of an individual vertex
+      5 * Float32Array.BYTES_PER_ELEMENT  // Offset from the beginning of a
       // single vertex to this attribute
     );
 
@@ -5332,15 +5579,16 @@ var soundingGraph = {
 
     gl.bindBuffer(gl.ARRAY_BUFFER, precipVertexBuffer_1);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(rainDrops), gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(positionAttribLocation);
+    gl.enableVertexAttribArray(dropPositionAttribLocation);
     gl.enableVertexAttribArray(massAttribLocation);
     gl.enableVertexAttribArray(densityAttribLocation);
+    gl.enableVertexAttribArray(sizeAttribLocation);
     gl.vertexAttribPointer(
       dropPositionAttribLocation,         // Attribute location
       2,                                  // Number of elements per attribute
       gl.FLOAT,                           // Type of elements
       gl.FALSE,
-      5 * Float32Array.BYTES_PER_ELEMENT, // Size of an individual vertex
+      dropletStrideBytes,                 // Size of an individual vertex
       0                                   // Offset from the beginning of a single vertex to this attribute
     );
     gl.vertexAttribPointer(
@@ -5348,7 +5596,7 @@ var soundingGraph = {
       2,                                  // Number of elements per attribute
       gl.FLOAT,                           // Type of elements
       gl.FALSE,
-      5 * Float32Array.BYTES_PER_ELEMENT, // Size of an individual vertex
+      dropletStrideBytes,                 // Size of an individual vertex
       2 * Float32Array.BYTES_PER_ELEMENT  // Offset from the beginning of a
       // single vertex to this attribute
     );
@@ -5357,8 +5605,17 @@ var soundingGraph = {
       1,                                  // Number of elements per attribute
       gl.FLOAT,                           // Type of elements
       gl.FALSE,
-      5 * Float32Array.BYTES_PER_ELEMENT, // Size of an individual vertex
+      dropletStrideBytes,                 // Size of an individual vertex
       4 * Float32Array.BYTES_PER_ELEMENT  // Offset from the beginning of a
+      // single vertex to this attribute
+    );
+    gl.vertexAttribPointer(
+      sizeAttribLocation,                 // Attribute location
+      1,                                  // Number of elements per attribute
+      gl.FLOAT,                           // Type of elements
+      gl.FALSE,
+      dropletStrideBytes,                 // Size of an individual vertex
+      5 * Float32Array.BYTES_PER_ELEMENT  // Offset from the beginning of a
       // single vertex to this attribute
     );
 
@@ -5373,9 +5630,6 @@ var soundingGraph = {
     gl.bindVertexArray(fluidVao);         // set screenfilling rect again
   }
 
-
-  const valsPerDroplet = 5;
-
   function logDropletsAndToggleFollow()
   {
     if (dropletFollowID >= 0) { // disable follow droplet
@@ -5387,7 +5641,7 @@ var soundingGraph = {
 
     // log data of all the droplets within the brush
     let tempDroplets = new Float32Array(valsPerDroplet * NUM_DROPLETS);
-    gl.bindBuffer(gl.TRANSFORM_FEEDBACK_BUFFER, even ? precipVertexBuffer_0 : precipVertexBuffer_1); // x, y, water, ice, density
+    gl.bindBuffer(gl.TRANSFORM_FEEDBACK_BUFFER, even ? precipVertexBuffer_0 : precipVertexBuffer_1); // x, y, water, ice, density, size
     gl.getBufferSubData(gl.TRANSFORM_FEEDBACK_BUFFER, 0, tempDroplets);
 
     console.log(' ');
@@ -5407,6 +5661,7 @@ var soundingGraph = {
       let water = tempDroplets[i + 2];
       let ice = tempDroplets[i + 3];
       let density = tempDroplets[i + 4];
+      let size = tempDroplets[i + 5];
 
       let dx = (mouseXinSim - x) * sim_aspect;
       let dy = mouseYinSim - y;
@@ -5419,6 +5674,7 @@ var soundingGraph = {
         console.log('water:', water);
         console.log('Ice:', ice);
         console.log('Density:', density);
+        console.log('Size:', size);
         console.log(' ');
         numInBrush++;
 
@@ -5522,6 +5778,14 @@ var soundingGraph = {
   const baseTexture_1 = gl.createTexture();
   const waterTexture_0 = gl.createTexture();
   const waterTexture_1 = gl.createTexture();
+  const reflectivitySnapshotTex = gl.createTexture();
+  const phaseTexture = gl.createTexture();           // liquid/ice sums
+  const phaseStatsTexture = gl.createTexture();      // density sums
+  const radarMomentsTexture = gl.createTexture();    // Zh, Zv, KDP, count
+  const radarFieldTexture_0 = gl.createTexture();    // smoothed radar field
+  const radarFieldTexture_1 = gl.createTexture();    // smoothed radar field
+  const phaseSnapshotTex = gl.createTexture();
+  const phaseStatsSnapshotTex = gl.createTexture();
   const wallTexture_0 = gl.createTexture();
   const wallTexture_1 = gl.createTexture();
 
@@ -5554,12 +5818,20 @@ var soundingGraph = {
 
   lightFrameBuff_0 = gl.createFramebuffer();
   const lightFrameBuff_1 = gl.createFramebuffer();
+  reflectivitySnapshotFBO = gl.createFramebuffer();
+  const phaseFrameBuff = gl.createFramebuffer();
+  const phaseSnapshotFBO = gl.createFramebuffer();
+  const radarFieldFrameBuff_0 = gl.createFramebuffer();
+  const radarFieldFrameBuff_1 = gl.createFramebuffer();
   const precipitationFeedbackFrameBuff = gl.createFramebuffer();
   const lightningDataFrameBuff = gl.createFramebuffer();
+  let radarFieldCurrentIndex = 0;
 
   // Set up Textures
   async function setupTextures()
   {
+    radarFieldCurrentIndex = 0;
+
     gl.bindTexture(gl.TEXTURE_2D, baseTexture_0);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, initialBaseTex);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
@@ -5601,6 +5873,49 @@ var soundingGraph = {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     // gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
+    // cache for radar refresh (RGBA32F to hold the smoothed radar field snapshot)
+    gl.bindTexture(gl.TEXTURE_2D, reflectivitySnapshotTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+    // live phase (water/ice sums)
+    gl.bindTexture(gl.TEXTURE_2D, phaseTexture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+    // live density stats (sum, sumSq, count)
+    gl.bindTexture(gl.TEXTURE_2D, phaseStatsTexture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+    gl.bindTexture(gl.TEXTURE_2D, radarMomentsTexture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+    gl.bindTexture(gl.TEXTURE_2D, radarFieldTexture_0);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+    gl.bindTexture(gl.TEXTURE_2D, radarFieldTexture_1);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+    gl.bindTexture(gl.TEXTURE_2D, phaseSnapshotTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+    gl.bindTexture(gl.TEXTURE_2D, phaseStatsSnapshotTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
 
     lastSaveTime = new Date();
   }
@@ -5608,6 +5923,24 @@ var soundingGraph = {
   setupTextures();
 
   createAmbientLightFBOs();
+
+  function refreshReflectivitySnapshot(now)
+  {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, phaseFrameBuff);
+    gl.readBuffer(gl.COLOR_ATTACHMENT0);
+    gl.bindTexture(gl.TEXTURE_2D, phaseSnapshotTex);
+    gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, sim_res_x, sim_res_y);
+    gl.readBuffer(gl.COLOR_ATTACHMENT1);
+    gl.bindTexture(gl.TEXTURE_2D, phaseStatsSnapshotTex);
+    gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, sim_res_x, sim_res_y);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, radarFieldCurrentIndex == 0 ? radarFieldFrameBuff_0 : radarFieldFrameBuff_1);
+    gl.readBuffer(gl.COLOR_ATTACHMENT0);
+    gl.bindTexture(gl.TEXTURE_2D, reflectivitySnapshotTex);
+    gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, sim_res_x, sim_res_y);
+    lastReflectivitySnapshotTime = now;
+    radarNeedsMeasure = true; // trigger radar updates after new snapshot
+  }
 
   // Set up Framebuffers
 
@@ -5622,6 +5955,33 @@ var soundingGraph = {
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, baseTexture_1, 0);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, waterTexture_1, 0);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT2, gl.TEXTURE_2D, wallTexture_1, 0);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, reflectivitySnapshotFBO);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, reflectivitySnapshotTex, 0);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, phaseFrameBuff);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, phaseTexture, 0);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, phaseStatsTexture, 0);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT2, gl.TEXTURE_2D, radarMomentsTexture, 0);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, radarFieldFrameBuff_0);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, radarFieldTexture_0, 0);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, radarFieldFrameBuff_1);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, radarFieldTexture_1, 0);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, phaseSnapshotFBO);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, phaseSnapshotTex, 0);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, phaseStatsSnapshotTex, 0);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, radarFieldFrameBuff_0);
+  gl.clearColor(0.0, 0.0, 0.0, 0.0);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, radarFieldFrameBuff_1);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+
+  // initialize snapshot immediately so first render has valid data
+  refreshReflectivitySnapshot(performance.now ? performance.now() : 0);
 
 
   gl.bindTexture(gl.TEXTURE_2D, curlTexture);
@@ -5946,6 +6306,17 @@ var soundingGraph = {
   gl.uniform2f(gl.getUniformLocation(precipDisplayProgram, 'texelSize'), texelSizeX, texelSizeY);
   gl.uniform1i(gl.getUniformLocation(precipDisplayProgram, 'waterTex'), 0);
   gl.uniform1i(gl.getUniformLocation(precipDisplayProgram, 'wallTex'), 2);
+
+  gl.useProgram(precipPhaseAccumProgram);
+  gl.uniform2f(gl.getUniformLocation(precipPhaseAccumProgram, 'resolution'), sim_res_x, sim_res_y);
+
+  gl.useProgram(radarFieldUpdateProgram);
+  gl.uniform2f(gl.getUniformLocation(radarFieldUpdateProgram, 'resolution'), sim_res_x, sim_res_y);
+  gl.uniform2f(gl.getUniformLocation(radarFieldUpdateProgram, 'texelSize'), texelSizeX, texelSizeY);
+  gl.uniform1i(gl.getUniformLocation(radarFieldUpdateProgram, 'baseTex'), 0);
+  gl.uniform1i(gl.getUniformLocation(radarFieldUpdateProgram, 'wallTex'), 1);
+  gl.uniform1i(gl.getUniformLocation(radarFieldUpdateProgram, 'radarFieldTex'), 2);
+  gl.uniform1i(gl.getUniformLocation(radarFieldUpdateProgram, 'radarSourceTex'), 3);
 
   gl.useProgram(skyBackgroundDisplayProgram);
   gl.uniform2f(gl.getUniformLocation(skyBackgroundDisplayProgram, 'resolution'), sim_res_x, sim_res_y);
@@ -6310,7 +6681,16 @@ var soundingGraph = {
 
 
             gl.bindFramebuffer(gl.FRAMEBUFFER, precipitationFeedbackFrameBuff);
+            gl.viewport(0, 0, sim_res_x, sim_res_y);
+            gl.drawBuffers([ gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1 ]);
+            gl.clearColor(0.0, 0.0, 0.0, 0.0);
             gl.clear(gl.COLOR_BUFFER_BIT);         // clear precipitation feedback
+
+            gl.bindFramebuffer(gl.FRAMEBUFFER, phaseFrameBuff);
+            gl.viewport(0, 0, sim_res_x, sim_res_y);
+            gl.drawBuffers([ gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2 ]);
+            gl.clearColor(0.0, 0.0, 0.0, 0.0);
+            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
             if (guiControls.enablePrecipitation) { // move precipitation, HUGE PERFORMANCE BOTTLENECK!
 
@@ -6325,10 +6705,13 @@ var soundingGraph = {
               gl.activeTexture(gl.TEXTURE2);
               gl.bindTexture(gl.TEXTURE_2D, lightningDataTexture);
 
+              gl.bindFramebuffer(gl.FRAMEBUFFER, precipitationFeedbackFrameBuff);
+              gl.viewport(0, 0, sim_res_x, sim_res_y);
+              gl.drawBuffers([ gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1 ]);
+
               gl.bindVertexArray(srcVAO);
               gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, destTF);
               gl.beginTransformFeedback(gl.POINTS);
-              gl.drawBuffers([ gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1 ]);
               gl.drawArrays(gl.POINTS, 0, NUM_DROPLETS);
               gl.endTransformFeedback();
 
@@ -6346,6 +6729,16 @@ var soundingGraph = {
               }
 
               gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
+              gl.disable(gl.BLEND);
+
+              // accumulate liquid/ice phase per cell for radar rhohv
+              gl.bindFramebuffer(gl.FRAMEBUFFER, phaseFrameBuff);
+              gl.drawBuffers([ gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2 ]);
+              gl.enable(gl.BLEND);
+              gl.blendFunc(gl.ONE, gl.ONE);
+              gl.useProgram(precipPhaseAccumProgram);
+              gl.bindVertexArray(destVAO); // latest droplet state
+              gl.drawArrays(gl.POINTS, 0, NUM_DROPLETS);
               gl.disable(gl.BLEND);
               gl.bindVertexArray(fluidVao); // set screenfilling rect again
 
@@ -6372,6 +6765,21 @@ var soundingGraph = {
                 }
               }
             }
+
+            gl.useProgram(radarFieldUpdateProgram);
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, baseTexture_1);
+            gl.activeTexture(gl.TEXTURE1);
+            gl.bindTexture(gl.TEXTURE_2D, wallTexture_1);
+            gl.activeTexture(gl.TEXTURE2);
+            gl.bindTexture(gl.TEXTURE_2D, radarFieldCurrentIndex == 0 ? radarFieldTexture_0 : radarFieldTexture_1);
+            gl.activeTexture(gl.TEXTURE3);
+            gl.bindTexture(gl.TEXTURE_2D, radarMomentsTexture);
+
+            gl.bindFramebuffer(gl.FRAMEBUFFER, radarFieldCurrentIndex == 0 ? radarFieldFrameBuff_1 : radarFieldFrameBuff_0);
+            gl.drawBuffers([ gl.COLOR_ATTACHMENT0 ]);
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            radarFieldCurrentIndex = 1 - radarFieldCurrentIndex;
 
             if (displayWeatherStations && iterNum % 208 == 0) { // ~every 60 in game seconds:  0.00008 *3600 * 208 = 59.9
               for (i = 0; i < weatherStations.length; i++) {
@@ -6443,10 +6851,40 @@ var soundingGraph = {
       ctx.fillText('Ice     : ' + dropletInfo[3].toFixed(2), 0, 30);
       ctx.fillStyle = '#00FF00';
       ctx.fillText('Dens : ' + dropletInfo[4].toFixed(2), 0, 45);
+      ctx.fillStyle = '#FFD400';
+      ctx.fillText('Size  : ' + dropletInfo[5].toFixed(2), 0, 60);
     }
 
     if (airplaneMode) {
       airplane.display();
+    }
+
+    // radar-like sweep: freeze reflectivity every user-defined interval
+    const nowMs = performance.now ? performance.now() : Date.now();
+    const refreshMs = Math.max(0.0, guiControls.reflectivityRefreshSec * 1000.0);
+    if (nowMs - lastReflectivitySnapshotTime >= refreshMs) {
+      refreshReflectivitySnapshot(nowMs);
+    }
+
+    // Reflectivity debug readout
+    if (guiControls.displayMode == 'DISP_REFLECTIVITY' && guiControls.debugReflectivity) {
+      var simXposDbg = Math.floor(Math.abs(mod(mouseXinSim * sim_res_x, sim_res_x)));
+      var simYposDbg = Math.min(Math.max(Math.floor(mouseYinSim * sim_res_y), 0), sim_res_y - 1);
+
+      gl.bindFramebuffer(gl.FRAMEBUFFER, reflectivitySnapshotFBO);
+      gl.readBuffer(gl.COLOR_ATTACHMENT0); // reflectivitySnapshotTex
+      var radarDbg = new Float32Array(4);
+      gl.readPixels(simXposDbg, simYposDbg, 1, 1, gl.RGBA, gl.FLOAT, radarDbg);
+
+      var zhDbg = Math.max(radarDbg[0], 0.0);
+      var z_raw_dbg = Math.sqrt(zhDbg) * guiControls.reflectivityGain + zhDbg * guiControls.reflectivityBoost;
+      var dBZ_dbg = 10.0 * Math.log10(z_raw_dbg + 1e-6);
+      reflectivityDbgEl.style.display = 'block';
+      reflectivityDbgEl.style.left = mouseX + 12 + 'px';
+      reflectivityDbgEl.style.top = mouseY + 12 + 'px';
+      reflectivityDbgEl.textContent = 'dBZ*: ' + dBZ_dbg.toFixed(1);
+    } else if (reflectivityDbgEl) {
+      reflectivityDbgEl.style.display = 'none';
     }
 
     // render to canvas
@@ -6781,6 +7219,28 @@ var soundingGraph = {
           gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'quantityIndex'), 1);
           gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'dispMultiplier'), 50000.0);
           break;
+        case 'DISP_REFLECTIVITY':
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindTexture(gl.TEXTURE_2D, waterTexture_1);
+          gl.activeTexture(gl.TEXTURE4);
+          gl.bindTexture(gl.TEXTURE_2D, reflectivitySnapshotTex);
+          gl.activeTexture(gl.TEXTURE5);
+          gl.bindTexture(gl.TEXTURE_2D, phaseSnapshotTex);
+          gl.activeTexture(gl.TEXTURE6);
+          gl.bindTexture(gl.TEXTURE_2D, phaseStatsSnapshotTex);
+        gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'quantityIndex'), 2); // unused in radar mode
+        gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'dispMultiplier'), 1.0);
+        gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'reflectivityMode'), 1);
+        gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'radarProduct'), guiControls.radarProduct == 'RADAR_RHOHV' ? 1 : 0);
+        gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflMult'), guiControls.reflectivityGain); // user gain
+        gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflBoost'), guiControls.reflectivityBoost);
+        gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflPixelSize'), guiControls.reflectivityPixelSize);
+        gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'reflBackground'), guiControls.reflectivityBackground ? 1 : 0);
+        if (!guiControls.reflectivityBackground) {
+          gl.enable(gl.BLEND);
+          gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        }
+        break;
         case 'DISP_PRECIPFEEDBACK_MASS':
           gl.activeTexture(gl.TEXTURE0);
           gl.bindTexture(gl.TEXTURE_2D, precipitationFeedbackTexture);
