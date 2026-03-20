@@ -76,15 +76,18 @@ float calcHydrometeorSize(vec2 hydromass, float hydrodensity)
     return 0.0;
 
   float iceFraction = ice / max(totalMass, 1e-6);
+  float liquidFraction = liquid / max(totalMass, 1e-6);
   float bulkDensity = max((1.0 - iceFraction) + iceFraction * max(hydrodensity, 0.12), 0.08);
   float baseSize = pow(totalMass / bulkDensity, 1.0 / 3.0);
+  float snowiness = clamp((0.95 - min(max(hydrodensity, 0.12), 1.0)) / 0.83, 0.0, 1.0);
 
   float phaseScale = 1.0;
   if (ice > 0.0) {
+    float dryIceScale = mix(0.96, 1.42, snowiness);
     if (liquid <= 1e-6)
-      phaseScale = hydrodensity < 0.95 ? 1.55 - min(max(hydrodensity, 0.12), 0.9) * 0.35 : 0.95;
+      phaseScale = dryIceScale;
     else
-      phaseScale = 1.05 + iceFraction * 0.25;
+      phaseScale = mix(dryIceScale, 1.0, smoothstep(0.05, 0.42, liquidFraction));
   }
 
   return baseSize * phaseScale;
@@ -283,10 +286,17 @@ void main()
       feedback[HEAT] -= subli * meltingHeat;
 
       float targetSize = calcHydrometeorSize(newMass, newDensity);
+      float liquidFractionPost = newMass[WATER] / max(newMass[WATER] + newMass[ICE], 1e-6);
+      float sizeAdjustRate = 0.35;
+      if (newMass[WATER] > 1e-6 && newMass[ICE] > 1e-6)
+        sizeAdjustRate = mix(0.55, 0.85, smoothstep(0.05, 0.40, liquidFractionPost));
+      else if (newMass[WATER] > 1e-6)
+        sizeAdjustRate = 0.45;
+
       if (newSize <= 0.0 || spawned)
         newSize = targetSize;
       else
-        newSize = mix(newSize, targetSize, 0.35);
+        newSize = mix(newSize, targetSize, sizeAdjustRate);
 
       // Update position
       // move with air    * 2. because droplet position goes from -1. to 1
