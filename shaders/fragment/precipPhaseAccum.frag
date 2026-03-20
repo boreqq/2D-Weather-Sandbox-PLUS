@@ -19,15 +19,6 @@ void main()
   float iceFraction = ice / max(total, 1e-6);
   float snowiness = clamp((0.95 - density) / 0.83, 0.0, 1.0);
 
-  float reflectivityWeight = 1.0;
-  if (ice > 0.0) {
-    if (liquid > 1e-6) {
-      reflectivityWeight = mix(0.65, 0.95, liquidFraction);
-    } else {
-      reflectivityWeight = mix(0.55, 0.10, snowiness);
-    }
-  }
-
   float flattening = 0.0;
   if (liquidFraction > 0.7) {
     flattening = clamp((size - 0.45) * 0.35, 0.0, 0.22);
@@ -37,25 +28,36 @@ void main()
     flattening = clamp((size - 0.60) * 0.08, 0.0, 0.04);
   }
 
-  // Super-particles represent packets of hydrometeors, not single drops, so the
-  // raw size proxy must be damped before using a D^6-style radar moment.
-  float effectiveSize = size * 0.45;
-  if (ice > 0.0) {
-    if (liquid > 1e-6) {
-      effectiveSize *= mix(0.85, 1.00, liquidFraction);
-    } else {
-      effectiveSize *= mix(0.75, 0.45, snowiness);
-    }
-  }
-
   // Suppress fresh/tiny particles so reflectivity does not instantly appear
   // everywhere new particles spawn inside cloud.
   float radarPresence = smoothstep(0.18, 0.45, total);
 
-  float baseMoment = radarPresence * reflectivityWeight * pow(max(effectiveSize, 1e-4), 6.0);
-  float zh = baseMoment * (1.0 + flattening);
-  float zv = baseMoment * max(1.0 - flattening * 0.75, 0.35);
-  float kdp = baseMoment * liquidFraction * flattening * 0.03;
+  // Split the packet into separate liquid/ice radar contributors.
+  // Water has a much stronger dielectric response than dry ice, while mixed-phase
+  // should only create a modest bright band instead of a detached strong stripe.
+  float waterSize = size * pow(max(liquidFraction, 0.0), 1.0 / 3.0);
+  float iceSize = size * pow(max(iceFraction, 0.0), 1.0 / 3.0);
+
+  // Keep rain stronger than dry ice/snow. Low-density ice still has a large
+  // geometric size proxy, so it needs an extra density-based damping before
+  // entering a D^6-style moment.
+  float waterMoment = pow(max(waterSize * 0.58, 1e-4), 6.0);
+  float iceRadarSize = iceSize * mix(0.22, 0.34, clamp(density, 0.12, 1.0));
+  float iceCoeff = mix(0.18, 0.04, snowiness); // hail/graupel > snow, all well below liquid water
+  float iceMoment = iceCoeff * pow(max(iceRadarSize, 1e-4), 6.0);
+
+  float brightBand = 0.0;
+  if (liquid > 1e-6 && ice > 1e-6) {
+    float onset = smoothstep(0.06, 0.22, liquidFraction);
+    float fade = 1.0 - smoothstep(0.45, 0.72, liquidFraction);
+    brightBand = onset * fade * mix(0.04, 0.09, 1.0 - snowiness);
+  }
+
+  float baseMoment = radarPresence * (waterMoment + iceMoment);
+  float zh = baseMoment * (1.0 + brightBand + flattening * 0.04);
+  float zv = radarPresence * (waterMoment * max(1.0 - flattening * 0.55, 0.60) + iceMoment * max(1.0 - flattening * 0.10, 0.90));
+  zv *= (1.0 + brightBand * 0.65);
+  float kdp = radarPresence * waterMoment * liquidFraction * flattening * 0.05;
 
   phaseOut0 = vec4(liquid, ice, 0.0, 0.0);
   phaseOut1 = vec4(density, density * density, 1.0, 0.0);
