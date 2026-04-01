@@ -4133,6 +4133,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         '7 IR Down -60°C to 26°C' : 'DISP_IRDOWNTEMP',
         '8 IR Up -26°C to 30°C' : 'DISP_IRUPTEMP',
         '9 Precipitation Mass' : 'DISP_PRECIPFEEDBACK_MASS',
+        'Particle Size (Drops)' : 'DISP_PARTICLE_SIZE',
         'Precipitation Heating/Cooling' : 'DISP_PRECIPFEEDBACK_HEAT',
         'Precipitation Condensation/Evaporation' : 'DISP_PRECIPFEEDBACK_VAPOR',
         'Rain Deposition' : 'DISP_PRECIPFEEDBACK_RAIN',
@@ -4276,8 +4277,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   function startSimulation()
   {
     SETUP_MODE = false;
-    gl.useProgram(postProcessingProgram);
-    gl.uniform1f(gl.getUniformLocation(postProcessingProgram, 'exposure'), guiControls.exposure);
     datGui.show(); // unhide
 
   clockEl = document.createElement('div');
@@ -6438,6 +6437,7 @@ var soundingGraph = {
   gl.uniform2f(gl.getUniformLocation(precipDisplayProgram, 'texelSize'), texelSizeX, texelSizeY);
   gl.uniform1i(gl.getUniformLocation(precipDisplayProgram, 'waterTex'), 0);
   gl.uniform1i(gl.getUniformLocation(precipDisplayProgram, 'wallTex'), 2);
+  gl.uniform1i(gl.getUniformLocation(precipDisplayProgram, 'precipDisplayMode'), 0);
 
   gl.useProgram(precipPhaseAccumProgram);
   gl.uniform2f(gl.getUniformLocation(precipPhaseAccumProgram, 'resolution'), sim_res_x, sim_res_y);
@@ -6469,6 +6469,7 @@ var soundingGraph = {
   gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'snapshotTex'), 4);
   gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'phaseTex'), 5);
   gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'phaseStatsTex'), 6);
+  gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'radarMomentsTex'), 7);
 
   gl.useProgram(realisticDisplayProgram);
   gl.uniform2f(gl.getUniformLocation(realisticDisplayProgram, 'resolution'), sim_res_x, sim_res_y);
@@ -7298,6 +7299,7 @@ var soundingGraph = {
         gl.useProgram(precipDisplayProgram);
         gl.uniform2f(gl.getUniformLocation(precipDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
         gl.uniform3f(gl.getUniformLocation(precipDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
+        gl.uniform1i(gl.getUniformLocation(precipDisplayProgram, 'precipDisplayMode'), 0);
         gl.bindVertexArray(destVAO);
         gl.drawArrays(gl.POINTS, 0, NUM_DROPLETS);
         gl.bindVertexArray(fluidVao); // set screenfilling rect again
@@ -7309,7 +7311,20 @@ var soundingGraph = {
       gl.activeTexture(gl.TEXTURE9);
       gl.bindTexture(gl.TEXTURE_2D, colorScalesTexture);
 
-      if (displayModeEffective == 'DISP_TEMPERATURE') {
+      if (displayModeEffective == 'DISP_PARTICLE_SIZE') {
+        gl.clearColor(0.035, 0.05, 0.08, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        gl.useProgram(precipDisplayProgram);
+        gl.uniform2f(gl.getUniformLocation(precipDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
+        gl.uniform3f(gl.getUniformLocation(precipDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
+        gl.uniform1i(gl.getUniformLocation(precipDisplayProgram, 'precipDisplayMode'), 1);
+        gl.bindVertexArray(destVAO);
+        gl.drawArrays(gl.POINTS, 0, NUM_DROPLETS);
+        gl.bindVertexArray(fluidVao);
+        gl.disable(gl.BLEND);
+      } else if (displayModeEffective == 'DISP_TEMPERATURE') {
         gl.useProgram(temperatureDisplayProgram);
         gl.uniform2f(gl.getUniformLocation(temperatureDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
         gl.uniform3f(gl.getUniformLocation(temperatureDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
@@ -7391,6 +7406,8 @@ var soundingGraph = {
           gl.bindTexture(gl.TEXTURE_2D, phaseSnapshotTex);
           gl.activeTexture(gl.TEXTURE6);
           gl.bindTexture(gl.TEXTURE_2D, phaseStatsSnapshotTex);
+          gl.activeTexture(gl.TEXTURE7);
+          gl.bindTexture(gl.TEXTURE_2D, radarMomentsTexture);
         gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'quantityIndex'), 2); // unused in radar mode
         gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'dispMultiplier'), 1.0);
         gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'reflectivityMode'), 1);
@@ -7449,7 +7466,8 @@ var soundingGraph = {
         }
       }
 
-      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); // draw to canvas
+      if (displayModeEffective != 'DISP_PARTICLE_SIZE')
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); // draw to canvas
     }
 
     if (overlayReflectivity) {
@@ -7478,6 +7496,8 @@ var soundingGraph = {
       gl.bindTexture(gl.TEXTURE_2D, phaseSnapshotTex);
       gl.activeTexture(gl.TEXTURE6);
       gl.bindTexture(gl.TEXTURE_2D, phaseStatsSnapshotTex);
+      gl.activeTexture(gl.TEXTURE7);
+      gl.bindTexture(gl.TEXTURE_2D, radarMomentsTexture);
       gl.activeTexture(gl.TEXTURE2);
       gl.bindTexture(gl.TEXTURE_2D, wallTexture_1);
 

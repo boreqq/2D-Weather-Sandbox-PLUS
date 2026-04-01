@@ -77,20 +77,30 @@ float calcHydrometeorSize(vec2 hydromass, float hydrodensity)
 
   float iceFraction = ice / max(totalMass, 1e-6);
   float liquidFraction = liquid / max(totalMass, 1e-6);
-  float bulkDensity = max((1.0 - iceFraction) + iceFraction * max(hydrodensity, 0.12), 0.08);
-  float baseSize = pow(totalMass / bulkDensity, 1.0 / 3.0);
-  float snowiness = clamp((0.95 - min(max(hydrodensity, 0.12), 1.0)) / 0.83, 0.0, 1.0);
+  float clampedDensity = clamp(hydrodensity, 0.12, 1.0);
 
-  float phaseScale = 1.0;
-  if (ice > 0.0) {
-    float dryIceScale = mix(0.96, 1.42, snowiness);
-    if (liquid <= 1e-6)
-      phaseScale = dryIceScale;
-    else
-      phaseScale = mix(dryIceScale, 1.0, smoothstep(0.05, 0.42, liquidFraction));
-  }
+  // Base size is water-equivalent. This avoids low-density snow blowing up to
+  // unrealistically huge diameters while still allowing hail to become larger.
+  float waterEquivalentSize = pow(totalMass, 1.0 / 3.0);
 
-  return baseSize * phaseScale;
+  float snowiness = clamp((0.72 - clampedDensity) / 0.42, 0.0, 1.0);
+  float hailness = smoothstep(0.80, 0.98, clampedDensity) * smoothstep(0.55, 0.95, iceFraction);
+
+  // Ordinary snow should stay relatively small, aggregates only modestly larger,
+  // while dense ice / hail can exceed rain size.
+  float drySnowScale = mix(0.88, 1.08, snowiness);
+  float hailScale = mix(1.02, 1.38, hailness);
+  float iceScale = mix(drySnowScale, hailScale, hailness);
+
+  // Keep the melting layer transition gentle so particles do not collapse in size
+  // the moment they start melting.
+  float mixedScale = mix(iceScale, max(1.00, 1.06 + hailness * 0.10), smoothstep(0.18, 0.88, liquidFraction));
+
+  if (ice <= 1e-6)
+    return waterEquivalentSize;
+  if (liquid <= 1e-6)
+    return waterEquivalentSize * iceScale;
+  return waterEquivalentSize * mixedScale;
 }
 
 void main()
@@ -287,11 +297,17 @@ void main()
 
       float targetSize = calcHydrometeorSize(newMass, newDensity);
       float liquidFractionPost = newMass[WATER] / max(newMass[WATER] + newMass[ICE], 1e-6);
-      float sizeAdjustRate = 0.35;
+      float sizeAdjustRate = 0.20;
       if (newMass[WATER] > 1e-6 && newMass[ICE] > 1e-6)
-        sizeAdjustRate = mix(0.55, 0.85, smoothstep(0.05, 0.40, liquidFractionPost));
+        sizeAdjustRate = mix(0.18, 0.32, smoothstep(0.10, 0.75, liquidFractionPost));
       else if (newMass[WATER] > 1e-6)
-        sizeAdjustRate = 0.45;
+        sizeAdjustRate = 0.28;
+      else if (newMass[ICE] > 1e-6)
+        sizeAdjustRate = 0.16;
+
+      // Faster response when droplets are shrinking (evaporation / melting -> smaller hydrometeor size)
+      if (targetSize < newSize)
+        sizeAdjustRate = max(sizeAdjustRate, 0.60);
 
       if (newSize <= 0.0 || spawned)
         newSize = targetSize;

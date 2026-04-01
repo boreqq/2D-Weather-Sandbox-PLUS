@@ -29,8 +29,9 @@ void main()
   }
 
   // Suppress fresh/tiny particles so reflectivity does not instantly appear
-  // everywhere new particles spawn inside cloud.
-  float radarPresence = smoothstep(0.18, 0.45, total);
+  // everywhere new particles spawn inside cloud, but allow upper-level ice to
+  // show a weak-to-moderate echo instead of disappearing completely.
+  float radarPresence = smoothstep(0.12, 0.35, total);
 
   // Split the packet into separate liquid/ice radar contributors.
   // Water has a much stronger dielectric response than dry ice, while mixed-phase
@@ -38,12 +39,13 @@ void main()
   float waterSize = size * pow(max(liquidFraction, 0.0), 1.0 / 3.0);
   float iceSize = size * pow(max(iceFraction, 0.0), 1.0 / 3.0);
 
-  // Keep rain stronger than dry ice/snow. Low-density ice still has a large
-  // geometric size proxy, so it needs an extra density-based damping before
-  // entering a D^6-style moment.
+  // Keep rain stronger than dry ice/snow, but avoid over-damping upper-level ice.
+  // Fluffier snow aggregates should still be visible aloft in reflectivity.
   float waterMoment = pow(max(waterSize * 0.58, 1e-4), 6.0);
-  float iceRadarSize = iceSize * mix(0.22, 0.34, clamp(density, 0.12, 1.0));
-  float iceCoeff = mix(0.18, 0.04, snowiness); // hail/graupel > snow, all well below liquid water
+  float iceDensity = clamp(density, 0.12, 1.0);
+  float aggregateBoost = mix(1.40, 1.10, iceDensity);
+  float iceRadarSize = iceSize * mix(0.42, 0.60, iceDensity) * aggregateBoost;
+  float iceCoeff = mix(0.32, 0.14, snowiness); // hail/graupel > snow, but snow should still echo aloft
   float iceMoment = iceCoeff * pow(max(iceRadarSize, 1e-4), 6.0);
 
   float brightBand = 0.0;
