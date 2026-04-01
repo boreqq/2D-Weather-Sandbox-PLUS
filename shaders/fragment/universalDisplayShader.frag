@@ -13,6 +13,7 @@ uniform sampler2D anyTex; // can be any RGBW32F texture
 uniform sampler2D snapshotTex; // cached radar moments for radar-like sweep
 uniform sampler2D phaseTex;    // cached liquid/ice split for rhohv
 uniform sampler2D phaseStatsTex; // cached density sums/sumsq/count
+uniform sampler2D radarMomentsTex; // cached Zh/Zv/KDP/count from precipitation accumulation
 uniform isampler2D wallTex;
 
 uniform int quantityIndex; // wich quantity to display
@@ -27,8 +28,18 @@ out vec4 fragmentColor;
 
 void main()
 {
-  vec4 cell = texture(anyTex, texCoord);
-  ivec2 wall = texture(wallTex, texCoord).xy;
+  vec2 sampleCoord = texCoord;
+  float effectivePixelSize = reflPixelSize;
+  if (reflectivityMode && radarProduct == 1) {
+    effectivePixelSize = max(reflPixelSize * 1.5, 1.0); // CC uses a slightly bigger sprite footprint
+  }
+  if (reflectivityMode && effectivePixelSize > 1.0) {
+    vec2 grid = resolution / effectivePixelSize;         // snap in sim-cell space
+    sampleCoord = floor(texCoord * grid) / grid;         // larger blocks for CC
+  }
+
+  vec4 cell = reflectivityMode ? texture(snapshotTex, sampleCoord) : texture(anyTex, sampleCoord);
+  ivec2 wall = texture(wallTex, sampleCoord).xy;
 
   float val = cell[quantityIndex] * dispMultiplier;
 
@@ -72,25 +83,38 @@ void main()
       float densVar = max(stats.g / count - densMean * densMean, 0.0); // E[x^2]-mu^2
       float densCV = sqrt(densVar) / max(densMean, 1e-6);
 
-      float mix = ice / max(liquid + ice, 1e-6);
+      float phaseMix = ice / max(liquid + ice, 1e-6);
       // ignore sparse/noisy bins or very weak echoes
-      if (zhLinear < 1e-6 || count < 2.0 || dBZ < 25.0) {
+      if (zhLinear < 1e-6 || count < 3.0 || dBZ < 20.0) {
         fragmentColor = vec4(rhoColor(1.0), alpha);
         return;
       }
 
       // heterogeneity penalty only for substantial mix (35–65% ice share)
       float hetero = 0.0;
-      if (mix > 0.35 && mix < 0.65) {
-        hetero = mix * (1.0 - mix); // 0..0.25
+      if (phaseMix > 0.35 && phaseMix < 0.65) {
+        hetero = phaseMix * (1.0 - phaseMix); // 0..0.25
       }
 
       // coefficient of variation of density captures size/phase diversity
       float cvPenalty = densCV * densCV; // variance proxy
+      float rhoDensity = clamp(exp(-1.2 * cvPenalty) - 0.15 * hetero, 0.6, 1.05);
 
-      float rho = exp(-1.2 * cvPenalty) - 0.15 * hetero;
+      // add radar moment component (Zh/Zv ratio) for CC behavior
+      vec4 moments = texture(radarMomentsTex, sampleCoord);
+      float zhMoment = max(moments.r, 1e-6);
+      float zvMoment = max(moments.g, 1e-6);
+      float zvzhRatio = clamp(zvMoment / zhMoment, 0.50, 0.98);
+      float rhoRadar = mix(0.75, 1.02, smoothstep(0.55, 0.95, zvzhRatio));
+
+      // balanced blend - both contributions matter for better sprite coherence
+      float rho = mix(rhoDensity, rhoRadar, 0.45);
+      rho = mix(rho, pow(rho, 0.91), 0.10);
       rho = clamp(rho, 0.6, 1.05);
-      fragmentColor = vec4(rhoColor(rho), alpha);
+
+      // RGB colormap by rho uses user palette (rhoColor), alpha for smooth transition
+      float rhoAlpha = clamp(alpha + 0.15, 0.35, 0.9);
+      fragmentColor = vec4(rhoColor(rho), rhoAlpha);
     }
   } else if (val > 0.0) {
     fragmentColor = vec4(1.0, 1.0 - val, 1.0 - val, 1.0);
