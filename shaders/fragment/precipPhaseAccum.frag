@@ -3,8 +3,8 @@ precision highp float;
 
 in vec4 data_out; // liquid, ice, density, size
 layout(location = 0) out vec4 phaseOut0; // R liquid sum, G ice sum, B -, A -
-layout(location = 1) out vec4 phaseOut1; // R densSum, G densSumSq, B count, A -
-layout(location = 2) out vec4 radarOut;  // R Zh proxy, G Zv proxy, B KDP proxy, A count
+layout(location = 1) out vec4 phaseOut1; // R log(Zh/Zv) sum, G log(Zh/Zv)^2 sum, B -, A -
+layout(location = 2) out vec4 radarOut;  // R Zh, G Zv, B sqrt(Zh*Zv), A count
 
 void main()
 {
@@ -59,9 +59,10 @@ void main()
   float zh = baseMoment * (1.0 + brightBand + flattening * 0.04);
   float zv = radarPresence * (waterMoment * max(1.0 - flattening * 0.55, 0.60) + iceMoment * max(1.0 - flattening * 0.10, 0.90));
   zv *= (1.0 + brightBand * 0.65);
-  float kdp = radarPresence * waterMoment * liquidFraction * flattening * 0.05;
+  float hv = sqrt(max(zh * zv, 0.0));
+  float logRatio = log(max(zh, 1e-8) / max(zv, 1e-8));
 
   phaseOut0 = vec4(liquid, ice, 0.0, 0.0);
-  phaseOut1 = vec4(density, density * density, 1.0, 0.0);
-  radarOut = vec4(zh, zv, kdp, 1.0);
+  phaseOut1 = vec4(logRatio, logRatio * logRatio, 0.0, 0.0);
+  radarOut = vec4(zh, zv, hv, 1.0);
 }
