@@ -13,7 +13,7 @@ uniform sampler2D anyTex; // can be any RGBW32F texture
 uniform sampler2D snapshotTex; // cached radar moments for radar-like sweep
 uniform sampler2D phaseTex;    // cached liquid/ice split for rhohv
 uniform sampler2D phaseStatsTex; // cached density sums/sumsq/count
-uniform sampler2D radarMomentsTex; // cached Zh/Zv/KDP/count from precipitation accumulation
+uniform sampler2D radarMomentsTex; // cached Zh/Zv/sumHV/count from precipitation accumulation
 uniform isampler2D wallTex;
 
 uniform int quantityIndex; // wich quantity to display

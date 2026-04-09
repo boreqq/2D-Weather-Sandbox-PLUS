@@ -395,6 +395,21 @@ const guiControls_default = {
   brushIntensity : 0.01,
   allowCaves : true,
   showGraph : false,
+  soundingSmoothing : true,
+  showCAPE : true,
+  showCIN : true,
+  showMLCAPE : true,
+  showCAPE03 : true,
+  reflectivityBackground : true,
+  debugReflectivity : false,
+  reflectivityGain : 0.0,
+  reflectivityBoost : 10000.0,
+  reflectivityPixelSize : 8,
+  rhohvBackground : true,
+  debugRhohv : false,
+  rhohvPixelSize : 8,
+  reflectivityRefreshSec : 2.0,
+  radarProduct : 'RADAR_REFLECTIVITY', // legacy save compatibility only
   realDewPoint : false, // show real dew point in graph, instead of dew point with cloud water included
   enablePrecipitation : true,
   showDrops : false,
@@ -638,6 +653,80 @@ function calcHydrometeorSizeProxy(waterMass, iceMass, density)
   }
 
   return baseSize * phaseScale;
+}
+
+function smoothstepJS(edge0, edge1, x)
+{
+  if (edge0 == edge1)
+    return x < edge0 ? 0.0 : 1.0;
+  const t = Math.min(Math.max((x - edge0) / (edge1 - edge0), 0.0), 1.0);
+  return t * t * (3.0 - 2.0 * t);
+}
+
+function calcDropletRadarMetrics(waterMass, iceMass, density, size)
+{
+  const liquid = Math.max(waterMass, 0.0);
+  const ice = Math.max(iceMass, 0.0);
+  const total = liquid + ice;
+  if (total <= 0.0 || size <= 0.0) {
+    return {
+      zh : 0.0,
+      zv : 0.0,
+      hv : 0.0,
+      hSize : 0.0,
+      vSize : 0.0,
+      flattening : 0.0,
+      radarPresence : 0.0,
+    };
+  }
+
+  const liquidFraction = liquid / Math.max(total, 1e-6);
+  const iceFraction = ice / Math.max(total, 1e-6);
+  const snowiness = Math.min(Math.max((0.95 - density) / 0.83, 0.0), 1.0);
+
+  let flattening = 0.0;
+  if (liquidFraction > 0.7)
+    flattening = Math.min(Math.max((size - 0.45) * 0.35, 0.0), 0.22);
+  else if (liquid > 0.0 && ice > 0.0)
+    flattening = Math.min(Math.max((size - 0.50) * 0.18, 0.0), 0.10);
+  else if (iceFraction > 0.99 && density < 0.95)
+    flattening = Math.min(Math.max((size - 0.60) * 0.08, 0.0), 0.04);
+
+  const radarPresence = smoothstepJS(0.12, 0.35, total);
+  const waterSize = size * Math.pow(Math.max(liquidFraction, 0.0), 1.0 / 3.0);
+  const iceSize = size * Math.pow(Math.max(iceFraction, 0.0), 1.0 / 3.0);
+
+  const waterMoment = Math.pow(Math.max(waterSize * 0.58, 1e-4), 6.0);
+  const iceDensity = Math.min(Math.max(density, 0.12), 1.0);
+  const aggregateBoost = (1.40 * (1.0 - iceDensity)) + (1.10 * iceDensity);
+  const iceRadarSize = iceSize * ((0.42 * (1.0 - iceDensity)) + (0.60 * iceDensity)) * aggregateBoost;
+  const iceCoeff = (0.32 * (1.0 - snowiness)) + (0.14 * snowiness);
+  const iceMoment = iceCoeff * Math.pow(Math.max(iceRadarSize, 1e-4), 6.0);
+
+  let brightBand = 0.0;
+  if (liquid > 1e-6 && ice > 1e-6) {
+    const onset = smoothstepJS(0.06, 0.22, liquidFraction);
+    const fade = 1.0 - smoothstepJS(0.45, 0.72, liquidFraction);
+    brightBand = onset * fade * ((0.04 * snowiness) + (0.09 * (1.0 - snowiness)));
+  }
+
+  const baseMoment = radarPresence * (waterMoment + iceMoment);
+  const zh = baseMoment * (1.0 + brightBand + flattening * 0.04);
+  let zv = radarPresence * (waterMoment * Math.max(1.0 - flattening * 0.55, 0.60) + iceMoment * Math.max(1.0 - flattening * 0.10, 0.90));
+  zv *= (1.0 + brightBand * 0.65);
+
+  const hSize = size * (1.0 + flattening * 0.60);
+  const vSize = size * Math.max(1.0 - flattening * 0.75, 0.55);
+
+  return {
+    zh,
+    zv,
+    hv : Math.sqrt(Math.max(zh * zv, 0.0)),
+    hSize,
+    vSize,
+    flattening,
+    radarPresence,
+  };
 }
 
 function upgradeLegacyPrecipArray(legacyPrecipArray)
@@ -3785,7 +3874,18 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     datGui = new dat.GUI();
     guiControls = JSON.parse(strGuiControls); // load settings object
 
+    for (const [key, value] of Object.entries(guiControls_default)) {
+      if (guiControls[key] === undefined) {
+        guiControls[key] = value;
+      }
+    }
+
     guiControls.tool = 'TOOL_NONE';
+
+    if (guiControls.radarProduct == 'RADAR_RHOHV') {
+      guiControls.displayMode = 'DISP_RHOHV';
+      guiControls.radarProduct = 'RADAR_REFLECTIVITY';
+    }
 
     cam.wrapHorizontally = guiControls.wrapHorizontally;
     cam.smooth = guiControls.SmoothCam;
@@ -4119,7 +4219,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         'Snow Deposition' : 'DISP_PRECIPFEEDBACK_SNOW',
         'Precipitation/Soil Moisture' : 'DISP_SOIL_MOISTURE',
         'Curl' : 'DISP_CURL',
-        'Air Quality' : 'DISP_AIRQUALITY'
+        'Air Quality' : 'DISP_AIRQUALITY',
+        'Reflectivity (beta)' : 'DISP_REFLECTIVITY',
+        'Correlation Coefficient (ρhv)' : 'DISP_RHOHV'
       })
       .name('Display Mode')
       .listen();
@@ -4234,18 +4336,46 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // Radar-specific controls
     var radar_folder = datGui.addFolder('Radar');
-    radar_folder.add(guiControls, 'reflectivityBackground').name('Reflectivity Background').listen();
-    radar_folder.add(guiControls, 'debugReflectivity').name('Debug dBZ at cursor').listen();
-    radar_folder.add(guiControls, 'reflectivityPixelSize', 0.1, 32, 0.1).name('Reflectivity Pixel size').listen();
     radar_folder.add(guiControls, 'reflectivityRefreshSec', 0.0, 10.0, 0.01)
       .name('Radar refresh (s)')
       .listen();
-    radar_folder.add(guiControls, 'radarProduct', {
-      'Reflectivity (dBZ)' : 'RADAR_REFLECTIVITY',
-      'Correlation Coefficient (ρhv)' : 'RADAR_RHOHV',
-    }).name('Radar Product');
+
+    var reflectivity_folder = datGui.addFolder('Reflectivity');
+    reflectivity_folder.add(guiControls, 'reflectivityBackground').name('Reflectivity Background').listen();
+    reflectivity_folder.add(guiControls, 'debugReflectivity').name('Debug dBZ at Cursor').listen();
+    reflectivity_folder.add(guiControls, 'reflectivityPixelSize', 1, 32, 1)
+      .name('Reflectivity Pixel Size')
+      .onChange(function() {
+        lastReflectivitySnapshotTime = -Infinity;
+      })
+      .listen();
+
+    var rhohv_folder = datGui.addFolder('Correlation Coefficient');
+    rhohv_folder.add(guiControls, 'rhohvBackground').name('ρhv Background').listen();
+    rhohv_folder.add(guiControls, 'debugRhohv').name('Debug ρhv at Cursor').listen();
+    rhohv_folder.add(guiControls, 'rhohvPixelSize', 1, 32, 1)
+      .name('ρhv Pixel Size')
+      .onChange(function() {
+        lastReflectivitySnapshotTime = -Infinity;
+      })
+      .listen();
 
     datGui.width = 400;
+  }
+
+  function isRhohvMode(displayMode)
+  {
+    return displayMode == 'DISP_RHOHV';
+  }
+
+  function getRadarProductBackground(displayMode)
+  {
+    return isRhohvMode(displayMode) ? guiControls.rhohvBackground : guiControls.reflectivityBackground;
+  }
+
+  function getRadarProductDebugEnabled(displayMode)
+  {
+    return isRhohvMode(displayMode) ? guiControls.debugRhohv : guiControls.debugReflectivity;
   }
 
   // guiControls.paused = true; // pause before first iteration for debugging
@@ -5149,7 +5279,9 @@ var soundingGraph = {
     } else if (event.key == 9) {
       guiControls.displayMode = 'DISP_PRECIPFEEDBACK_MASS';
     } else if (event.key == 0) {
-      guiControls.displayMode = 'DISP_PRECIPFEEDBACK_HEAT';
+      guiControls.displayMode = 'DISP_REFLECTIVITY';
+    } else if (event.code == 'KeyC') {
+      guiControls.displayMode = 'DISP_RHOHV';
     } else if (event.code == 'KeyK') {
       guiControls.displayMode = 'DISP_AIRQUALITY';
     } else if (event.key == 'ArrowLeft') {
@@ -5324,6 +5456,9 @@ var soundingGraph = {
   const temperatureDisplayShader = await loadShader('temperatureDisplayShader.frag');
   const airQualityDisplayShader = await loadShader('airQualityDisplayShader.frag');
   const precipDisplayShader = await loadShader('precipDisplayShader.frag');
+  const precipPhaseAccumShader = await loadShader('precipPhaseAccum.frag');
+  const rhohvFieldShader = await loadShader('rhohvFieldShader.frag');
+  const rhohvDisplayShader = await loadShader('rhohvDisplayShader.frag');
   const universalDisplayShader = await loadShader('universalDisplayShader.frag');
   const skyBackgroundDisplayShader = await loadShader('skyBackgroundDisplayShader.frag');
   const realisticDisplayShader = await loadShader('realisticDisplayShader.frag');
@@ -5352,6 +5487,9 @@ var soundingGraph = {
   const temperatureDisplayProgram = createProgram(dispVertexShader, temperatureDisplayShader);
   const airQualityDisplayProgram = createProgram(dispVertexShader, airQualityDisplayShader);
   const precipDisplayProgram = createProgram(precipDisplayVertexShader, precipDisplayShader);
+  const precipPhaseAccumProgram = createProgram(precipPhaseAccumVertexShader, precipPhaseAccumShader);
+  const rhohvFieldProgram = createProgram(simVertexShader, rhohvFieldShader);
+  const rhohvDisplayProgram = createProgram(dispVertexShader, rhohvDisplayShader);
   const universalDisplayProgram = createProgram(dispVertexShader, universalDisplayShader);
   const skyBackgroundDisplayProgram = createProgram(realDispVertexShader, skyBackgroundDisplayShader);
   const realisticDisplayProgram = createProgram(realDispVertexShader, realisticDisplayShader);
@@ -5631,9 +5769,10 @@ var soundingGraph = {
 
   function logDropletsAndToggleFollow()
   {
+    let dropletInfoCanvas = document.getElementById('dropletInfoCanvas');
+
     if (dropletFollowID >= 0) { // disable follow droplet
       dropletFollowID = -1;
-      let dropletInfoCanvas = document.getElementById('dropletInfoCanvas');
       dropletInfoCanvas.style.display = 'none';
       return;
     }
@@ -5667,6 +5806,7 @@ var soundingGraph = {
       let dist = Math.sqrt(dx * dx + dy * dy);
 
       if (dist < guiControls.brushSize / 2.0 / sim_res_y && water >= 0) { // if droplet is within the brush and active
+        let radarMetrics = calcDropletRadarMetrics(water, ice, density, size);
         console.log('n:', n);
         console.log('x:', x);
         console.log('y:', y);
@@ -5674,6 +5814,12 @@ var soundingGraph = {
         console.log('Ice:', ice);
         console.log('Density:', density);
         console.log('Size:', size);
+        console.log('Zh:', radarMetrics.zh);
+        console.log('Zv:', radarMetrics.zv);
+        console.log('HV:', radarMetrics.hv);
+        console.log('H size:', radarMetrics.hSize);
+        console.log('V size:', radarMetrics.vSize);
+        console.log('Flattening:', radarMetrics.flattening);
         console.log(' ');
         numInBrush++;
 
@@ -5779,8 +5925,10 @@ var soundingGraph = {
   const waterTexture_1 = gl.createTexture();
   const reflectivitySnapshotTex = gl.createTexture();
   const phaseTexture = gl.createTexture();           // liquid/ice sums
-  const phaseStatsTexture = gl.createTexture();      // density sums
-  const radarMomentsTexture = gl.createTexture();    // Zh, Zv, KDP, count
+  const phaseStatsTexture = gl.createTexture();      // Zh/Zv ratio stats for rhohv
+  const radarMomentsTexture = gl.createTexture();    // Zh, Zv, sumHV, count
+  const radarMomentsSnapshotTex = gl.createTexture();
+  const rhohvSnapshotTex = gl.createTexture();
   const radarFieldTexture_0 = gl.createTexture();    // smoothed radar field
   const radarFieldTexture_1 = gl.createTexture();    // smoothed radar field
   const phaseSnapshotTex = gl.createTexture();
@@ -5818,6 +5966,7 @@ var soundingGraph = {
   lightFrameBuff_0 = gl.createFramebuffer();
   const lightFrameBuff_1 = gl.createFramebuffer();
   reflectivitySnapshotFBO = gl.createFramebuffer();
+  const rhohvSnapshotFBO = gl.createFramebuffer();
   const phaseFrameBuff = gl.createFramebuffer();
   const phaseSnapshotFBO = gl.createFramebuffer();
   const radarFieldFrameBuff_0 = gl.createFramebuffer();
@@ -5884,13 +6033,23 @@ var soundingGraph = {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 
-    // live density stats (sum, sumSq, count)
+    // live Zh/Zv ratio stats for rhohv
     gl.bindTexture(gl.TEXTURE_2D, phaseStatsTexture);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 
     gl.bindTexture(gl.TEXTURE_2D, radarMomentsTexture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+    gl.bindTexture(gl.TEXTURE_2D, radarMomentsSnapshotTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+    gl.bindTexture(gl.TEXTURE_2D, rhohvSnapshotTex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
@@ -5932,11 +6091,29 @@ var soundingGraph = {
     gl.readBuffer(gl.COLOR_ATTACHMENT1);
     gl.bindTexture(gl.TEXTURE_2D, phaseStatsSnapshotTex);
     gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, sim_res_x, sim_res_y);
+    gl.readBuffer(gl.COLOR_ATTACHMENT2);
+    gl.bindTexture(gl.TEXTURE_2D, radarMomentsSnapshotTex);
+    gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, sim_res_x, sim_res_y);
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, radarFieldCurrentIndex == 0 ? radarFieldFrameBuff_0 : radarFieldFrameBuff_1);
     gl.readBuffer(gl.COLOR_ATTACHMENT0);
     gl.bindTexture(gl.TEXTURE_2D, reflectivitySnapshotTex);
     gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, sim_res_x, sim_res_y);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, rhohvSnapshotFBO);
+    gl.viewport(0, 0, sim_res_x, sim_res_y);
+    gl.drawBuffers([ gl.COLOR_ATTACHMENT0 ]);
+    gl.disable(gl.BLEND);
+    gl.useProgram(rhohvFieldProgram);
+    gl.uniform1f(gl.getUniformLocation(rhohvFieldProgram, 'binSize'), Math.max(1.0, Math.round(guiControls.rhohvPixelSize)));
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, radarMomentsSnapshotTex);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, phaseStatsSnapshotTex);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, wallTexture_1);
+    gl.bindVertexArray(fluidVao);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     lastReflectivitySnapshotTime = now;
     radarNeedsMeasure = true; // trigger radar updates after new snapshot
   }
@@ -5957,6 +6134,9 @@ var soundingGraph = {
 
   gl.bindFramebuffer(gl.FRAMEBUFFER, reflectivitySnapshotFBO);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, reflectivitySnapshotTex, 0);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, rhohvSnapshotFBO);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, rhohvSnapshotTex, 0);
 
   gl.bindFramebuffer(gl.FRAMEBUFFER, phaseFrameBuff);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, phaseTexture, 0);
@@ -6309,6 +6489,19 @@ var soundingGraph = {
 
   gl.useProgram(precipPhaseAccumProgram);
   gl.uniform2f(gl.getUniformLocation(precipPhaseAccumProgram, 'resolution'), sim_res_x, sim_res_y);
+
+  gl.useProgram(rhohvFieldProgram);
+  gl.uniform2f(gl.getUniformLocation(rhohvFieldProgram, 'resolution'), sim_res_x, sim_res_y);
+  gl.uniform2f(gl.getUniformLocation(rhohvFieldProgram, 'texelSize'), texelSizeX, texelSizeY);
+  gl.uniform1i(gl.getUniformLocation(rhohvFieldProgram, 'radarMomentsTex'), 0);
+  gl.uniform1i(gl.getUniformLocation(rhohvFieldProgram, 'phaseStatsTex'), 1);
+  gl.uniform1i(gl.getUniformLocation(rhohvFieldProgram, 'wallTex'), 2);
+  gl.uniform1f(gl.getUniformLocation(rhohvFieldProgram, 'dryLapse'), dryLapse);
+
+  gl.useProgram(rhohvDisplayProgram);
+  gl.uniform2f(gl.getUniformLocation(rhohvDisplayProgram, 'resolution'), sim_res_x, sim_res_y);
+  gl.uniform2f(gl.getUniformLocation(rhohvDisplayProgram, 'texelSize'), texelSizeX, texelSizeY);
+  gl.uniform1i(gl.getUniformLocation(rhohvDisplayProgram, 'rhohvTex'), 4);
 
   gl.useProgram(radarFieldUpdateProgram);
   gl.uniform2f(gl.getUniformLocation(radarFieldUpdateProgram, 'resolution'), sim_res_x, sim_res_y);
@@ -6836,6 +7029,7 @@ var soundingGraph = {
     // Follow droplet
     if (dropletFollowID >= 0) {
       let dropletInfo = readDropletData(dropletFollowID);
+      let radarMetrics = calcDropletRadarMetrics(dropletInfo[2], dropletInfo[3], dropletInfo[4], dropletInfo[5]);
       cam.setPosition(-dropletInfo[0] * 2.0 + 1.0, -dropletInfo[1] * 2.0 * (sim_res_y / sim_res_x) + (sim_res_y / sim_res_x));
 
       let dropletInfoCanvas = document.getElementById('dropletInfoCanvas');
@@ -6848,15 +7042,23 @@ var soundingGraph = {
       ctx.fillStyle = '#FF0000';
       ctx.fillRect(0, 0, 2, 2);
 
-      ctx.font = '15px Arial';
+      ctx.font = '12px Arial';
       ctx.fillStyle = '#00AAFF';
-      ctx.fillText('Water: ' + dropletInfo[2].toFixed(2), 0, 15);
+      ctx.fillText('Water: ' + dropletInfo[2].toFixed(2), 0, 14);
       ctx.fillStyle = '#FFFFFF';
-      ctx.fillText('Ice     : ' + dropletInfo[3].toFixed(2), 0, 30);
+      ctx.fillText('Ice: ' + dropletInfo[3].toFixed(2), 0, 28);
       ctx.fillStyle = '#00FF00';
-      ctx.fillText('Dens : ' + dropletInfo[4].toFixed(2), 0, 45);
+      ctx.fillText('Dens: ' + dropletInfo[4].toFixed(2), 0, 42);
       ctx.fillStyle = '#FFD400';
-      ctx.fillText('Size  : ' + dropletInfo[5].toFixed(2), 0, 60);
+      ctx.fillText('Size: ' + dropletInfo[5].toFixed(2), 0, 56);
+      ctx.fillStyle = '#FF8A00';
+      ctx.fillText('Zh: ' + radarMetrics.zh.toExponential(1), 0, 70);
+      ctx.fillStyle = '#FFCC00';
+      ctx.fillText('Zv: ' + radarMetrics.zv.toExponential(1), 0, 84);
+      ctx.fillStyle = '#FF66CC';
+      ctx.fillText('HV: ' + radarMetrics.hv.toExponential(1), 0, 98);
+      ctx.fillStyle = '#C0C0FF';
+      ctx.fillText('H/V sz: ' + radarMetrics.hSize.toFixed(2) + ' / ' + radarMetrics.vSize.toFixed(2), 0, 112);
     }
 
     if (airplaneMode) {
@@ -6871,27 +7073,41 @@ var soundingGraph = {
     }
 
     // Reflectivity debug readout
-    if (guiControls.displayMode == 'DISP_REFLECTIVITY' && guiControls.debugReflectivity) {
+    if ((guiControls.displayMode == 'DISP_REFLECTIVITY' || guiControls.displayMode == 'DISP_RHOHV') && getRadarProductDebugEnabled(guiControls.displayMode)) {
       var simXposDbg = Math.floor(Math.abs(mod(mouseXinSim * sim_res_x, sim_res_x)));
       var simYposDbg = Math.min(Math.max(Math.floor(mouseYinSim * sim_res_y), 0), sim_res_y - 1);
 
-      gl.bindFramebuffer(gl.FRAMEBUFFER, reflectivitySnapshotFBO);
-      gl.readBuffer(gl.COLOR_ATTACHMENT0); // reflectivitySnapshotTex
       var radarDbg = new Float32Array(4);
-      gl.readPixels(simXposDbg, simYposDbg, 1, 1, gl.RGBA, gl.FLOAT, radarDbg);
+      if (guiControls.displayMode == 'DISP_REFLECTIVITY') {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, reflectivitySnapshotFBO);
+        gl.readBuffer(gl.COLOR_ATTACHMENT0); // reflectivitySnapshotTex
+        gl.readPixels(simXposDbg, simYposDbg, 1, 1, gl.RGBA, gl.FLOAT, radarDbg);
+      } else {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, rhohvSnapshotFBO);
+        gl.readBuffer(gl.COLOR_ATTACHMENT0); // rhohvSnapshotTex
+        gl.readPixels(simXposDbg, simYposDbg, 1, 1, gl.RGBA, gl.FLOAT, radarDbg);
+      }
 
-      var zhDbg = Math.max(radarDbg[0], 0.0);
-      var z_raw_dbg = Math.sqrt(zhDbg) * guiControls.reflectivityGain + zhDbg * guiControls.reflectivityBoost;
-      var dBZ_dbg = 10.0 * Math.log10(z_raw_dbg + 1e-6);
       reflectivityDbgEl.style.display = 'block';
       reflectivityDbgEl.style.left = mouseX + 12 + 'px';
       reflectivityDbgEl.style.top = mouseY + 12 + 'px';
-      reflectivityDbgEl.textContent = 'dBZ*: ' + dBZ_dbg.toFixed(1);
+      if (guiControls.displayMode == 'DISP_REFLECTIVITY') {
+        var zhDbg = Math.max(radarDbg[0], 0.0);
+        var z_raw_dbg = Math.sqrt(zhDbg) * guiControls.reflectivityGain + zhDbg * guiControls.reflectivityBoost;
+        var dBZ_dbg = 10.0 * Math.log10(z_raw_dbg + 1e-6);
+        reflectivityDbgEl.textContent = 'dBZ*: ' + dBZ_dbg.toFixed(1);
+      } else {
+        reflectivityDbgEl.textContent = 'ρhv: ' + radarDbg[0].toFixed(3);
+      }
     } else if (reflectivityDbgEl) {
       reflectivityDbgEl.style.display = 'none';
     }
 
     // render to canvas
+    const isRadarProductMode = guiControls.displayMode == 'DISP_REFLECTIVITY' || guiControls.displayMode == 'DISP_RHOHV';
+    const overlayRadarProduct = isRadarProductMode && !getRadarProductBackground(guiControls.displayMode);
+    const displayModeEffective = overlayRadarProduct ? 'DISP_REAL' : guiControls.displayMode;
+
     gl.useProgram(realisticDisplayProgram);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null); // null is canvas
     gl.viewport(0, 0, canvas.width, canvas.height);
@@ -7209,6 +7425,20 @@ var soundingGraph = {
 
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, lightTexture_0);
+      } else if (displayModeEffective == 'DISP_RHOHV') {
+        gl.useProgram(rhohvDisplayProgram);
+        gl.uniform2f(gl.getUniformLocation(rhohvDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
+        gl.uniform3f(gl.getUniformLocation(rhohvDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
+        gl.uniform4f(gl.getUniformLocation(rhohvDisplayProgram, 'cursor'), mouseXinSim, mouseYinSim, guiControls.brushSize * 0.5, cursorType);
+        gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'Xmult'), horizontalDisplayMult);
+        gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'productAlpha'), 0.76);
+        gl.uniform1i(gl.getUniformLocation(rhohvDisplayProgram, 'productOpaque'), guiControls.rhohvBackground ? 1 : 0);
+        gl.activeTexture(gl.TEXTURE4);
+        gl.bindTexture(gl.TEXTURE_2D, rhohvSnapshotTex);
+        if (!guiControls.rhohvBackground) {
+          gl.enable(gl.BLEND);
+          gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        }
       } else {
         gl.useProgram(universalDisplayProgram);
         gl.uniform2f(gl.getUniformLocation(universalDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
@@ -7251,7 +7481,7 @@ var soundingGraph = {
         gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'quantityIndex'), 2); // unused in radar mode
         gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'dispMultiplier'), 1.0);
         gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'reflectivityMode'), 1);
-        gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'radarProduct'), guiControls.radarProduct == 'RADAR_RHOHV' ? 1 : 0);
+        gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'radarProduct'), 0);
         gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflMult'), guiControls.reflectivityGain); // user gain
         gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflBoost'), guiControls.reflectivityBoost);
         gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflPixelSize'), guiControls.reflectivityPixelSize);
@@ -7310,36 +7540,48 @@ var soundingGraph = {
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); // draw to canvas
     }
 
-    if (overlayReflectivity) {
+    if (overlayRadarProduct) {
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
-      gl.useProgram(universalDisplayProgram);
-      gl.uniform2f(gl.getUniformLocation(universalDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
-      gl.uniform3f(gl.getUniformLocation(universalDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
-      gl.uniform4f(gl.getUniformLocation(universalDisplayProgram, 'cursor'), mouseXinSim, mouseYinSim, guiControls.brushSize * 0.5, cursorType);
-      gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'Xmult'), horizontalDisplayMult);
-      gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'reflectivityMode'), 1);
-      gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflMult'), guiControls.reflectivityGain);
-      gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflBoost'), guiControls.reflectivityBoost);
-      gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflPixelSize'), guiControls.reflectivityPixelSize);
-      gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'reflBackground'), guiControls.reflectivityBackground ? 1 : 0);
-      gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'radarProduct'), guiControls.radarProduct == 'RADAR_RHOHV' ? 1 : 0);
-      gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'quantityIndex'), 2);
-      gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'dispMultiplier'), 1.0);
+      if (guiControls.displayMode == 'DISP_REFLECTIVITY') {
+        gl.useProgram(universalDisplayProgram);
+        gl.uniform2f(gl.getUniformLocation(universalDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
+        gl.uniform3f(gl.getUniformLocation(universalDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
+        gl.uniform4f(gl.getUniformLocation(universalDisplayProgram, 'cursor'), mouseXinSim, mouseYinSim, guiControls.brushSize * 0.5, cursorType);
+        gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'Xmult'), horizontalDisplayMult);
+        gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'reflectivityMode'), 1);
+        gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflMult'), guiControls.reflectivityGain);
+        gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflBoost'), guiControls.reflectivityBoost);
+        gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflPixelSize'), guiControls.reflectivityPixelSize);
+        gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'reflBackground'), guiControls.reflectivityBackground ? 1 : 0);
+        gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'radarProduct'), 0);
+        gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'quantityIndex'), 2);
+        gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'dispMultiplier'), 1.0);
 
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, waterTexture_1);
-      gl.activeTexture(gl.TEXTURE4);
-      gl.bindTexture(gl.TEXTURE_2D, reflectivitySnapshotTex);
-      gl.activeTexture(gl.TEXTURE5);
-      gl.bindTexture(gl.TEXTURE_2D, phaseSnapshotTex);
-      gl.activeTexture(gl.TEXTURE6);
-      gl.bindTexture(gl.TEXTURE_2D, phaseStatsSnapshotTex);
-      gl.activeTexture(gl.TEXTURE7);
-      gl.bindTexture(gl.TEXTURE_2D, radarMomentsTexture);
-      gl.activeTexture(gl.TEXTURE2);
-      gl.bindTexture(gl.TEXTURE_2D, wallTexture_1);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, waterTexture_1);
+        gl.activeTexture(gl.TEXTURE4);
+        gl.bindTexture(gl.TEXTURE_2D, reflectivitySnapshotTex);
+        gl.activeTexture(gl.TEXTURE5);
+        gl.bindTexture(gl.TEXTURE_2D, phaseSnapshotTex);
+        gl.activeTexture(gl.TEXTURE6);
+        gl.bindTexture(gl.TEXTURE_2D, phaseStatsSnapshotTex);
+        gl.activeTexture(gl.TEXTURE7);
+        gl.bindTexture(gl.TEXTURE_2D, radarMomentsTexture);
+        gl.activeTexture(gl.TEXTURE2);
+        gl.bindTexture(gl.TEXTURE_2D, wallTexture_1);
+      } else {
+        gl.useProgram(rhohvDisplayProgram);
+        gl.uniform2f(gl.getUniformLocation(rhohvDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
+        gl.uniform3f(gl.getUniformLocation(rhohvDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
+        gl.uniform4f(gl.getUniformLocation(rhohvDisplayProgram, 'cursor'), mouseXinSim, mouseYinSim, guiControls.brushSize * 0.5, cursorType);
+        gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'Xmult'), horizontalDisplayMult);
+        gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'productAlpha'), 0.76);
+        gl.uniform1i(gl.getUniformLocation(rhohvDisplayProgram, 'productOpaque'), 0);
+        gl.activeTexture(gl.TEXTURE4);
+        gl.bindTexture(gl.TEXTURE_2D, rhohvSnapshotTex);
+      }
 
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       gl.disable(gl.BLEND);
