@@ -6,11 +6,13 @@ layout(location = 0) in vec2 dropPosition;
 layout(location = 1) in vec2 mass; //[0] water   [1] ice
 layout(location = 2) in float density;
 layout(location = 3) in float size;
+layout(location = 4) in float compactness;
 
 out vec2 position_out;
 out vec2 mass_out;
 out float density_out;
 out float size_out;
+out float compactness_out;
 
 uniform vec2 texelSize;
 uniform vec2 aspectRatios; // sim   canvas
@@ -42,4 +44,5 @@ void main()
   mass_out = mass;
   density_out = density;
   size_out = size;
+  compactness_out = compactness;
 }
