@@ -340,10 +340,12 @@ const radToDeg = 57.2957795;
 const kmToMil = 0.62137;
 const mToFt = 3.28084;
 
-const saveFileVersionID = 322531714;         // Uint32 id to check if save file is compatible
-const previousSaveFileVersionID = 263574036; // previous save format with 5 floats per droplet
-const legacySaveFileVersionID = 1939327491;  // older save format without embedded settings
-const valsPerDroplet = 6;
+const saveFileVersionID = 910274663;              // Uint32 id to check if save file is compatible
+const previousSaveFileVersionID = 322531714;      // previous save format with 6 floats per droplet
+const legacySaveFileVersionID = 263574036;        // earlier save format with 5 floats per droplet
+const olderLegacySaveFileVersionID = 1939327491;  // oldest save format without embedded settings
+const valsPerDroplet = 7;
+const previousValsPerDroplet = 6;
 const legacyValsPerDroplet = 5;
 
 const guiControls_default = {
@@ -636,29 +638,6 @@ function printSnowHeight(snowHeight_cm)
     return snowHeight_cm.toFixed(1) + ' cm';
 }
 
-function calcHydrometeorSizeProxy(waterMass, iceMass, density)
-{
-  const liquid = Math.max(waterMass, 0.0);
-  const ice = Math.max(iceMass, 0.0);
-  const totalMass = liquid + ice;
-  if (totalMass <= 0.0)
-    return 0.0;
-
-  const iceFraction = ice / Math.max(totalMass, 1e-6);
-  const bulkDensity = Math.max((1.0 - iceFraction) + iceFraction * Math.max(density, 0.12), 0.08);
-  const baseSize = Math.pow(totalMass / bulkDensity, 1.0 / 3.0);
-
-  let phaseScale = 1.0;
-  if (ice > 0.0) {
-    if (liquid <= 1e-6)
-      phaseScale = density < 0.95 ? 1.55 - Math.min(Math.max(density, 0.12), 0.9) * 0.35 : 0.95;
-    else
-      phaseScale = 1.05 + iceFraction * 0.25;
-  }
-
-  return baseSize * phaseScale;
-}
-
 function smoothstepJS(edge0, edge1, x)
 {
   if (edge0 == edge1)
@@ -667,7 +646,150 @@ function smoothstepJS(edge0, edge1, x)
   return t * t * (3.0 - 2.0 * t);
 }
 
-function calcDropletRadarMetrics(waterMass, iceMass, density, size)
+function mixJS(a, b, t)
+{
+  return a * (1.0 - t) + b * t;
+}
+
+function clamp01(x)
+{
+  return Math.min(Math.max(x, 0.0), 1.0);
+}
+
+function inferCompactnessProxy(waterMass, iceMass, density, size = 0.0)
+{
+  const liquid = Math.max(waterMass, 0.0);
+  const ice = Math.max(iceMass, 0.0);
+  const total = liquid + ice;
+  if (total <= 0.0)
+    return 0.0;
+  if (ice <= 1e-6)
+    return 1.0;
+
+  const iceFraction = ice / Math.max(total, 1e-6);
+  const liquidFraction = liquid / Math.max(total, 1e-6);
+  const densityNorm = smoothstepJS(0.42, 0.98, Math.min(Math.max(density, 0.0), 1.0));
+  const iceNorm = smoothstepJS(0.55, 0.98, iceFraction);
+  const sizeNorm = smoothstepJS(0.45, 1.35, Math.max(size, 0.0));
+  const baseCompactness = 0.08 + densityNorm * 0.52 + iceNorm * 0.22 + sizeNorm * 0.18;
+  const dryIceCore = smoothstepJS(0.90, 0.995, iceFraction) *
+                     (1.0 - smoothstepJS(0.02, 0.12, liquidFraction)) *
+                     smoothstepJS(0.82, 1.00, Math.min(Math.max(density, 0.0), 1.0));
+  const hailCoreBoost = dryIceCore * smoothstepJS(0.80, 1.50, Math.max(size, 0.0));
+  return clamp01(Math.max(baseCompactness, hailCoreBoost * mixJS(0.58, 0.92, hailCoreBoost)));
+}
+
+function calcHydrometeorSizeProxy(waterMass, iceMass, density, compactness = inferCompactnessProxy(waterMass, iceMass, density, 0.0))
+{
+  const liquid = Math.max(waterMass, 0.0);
+  const ice = Math.max(iceMass, 0.0);
+  const totalMass = liquid + ice;
+  if (totalMass <= 0.0)
+    return 0.0;
+
+  const iceFraction = ice / Math.max(totalMass, 1e-6);
+  const liquidFraction = liquid / Math.max(totalMass, 1e-6);
+  const clampedDensity = Math.min(Math.max(density, 0.12), 1.0);
+  const clampedCompactness = clamp01(compactness);
+  const waterEquivalentSize = Math.pow(totalMass, 1.0 / 3.0);
+
+  const snowiness = clamp01((0.72 - clampedDensity) / 0.42) * (1.0 - smoothstepJS(0.28, 0.72, clampedCompactness));
+  const hailness = smoothstepJS(0.72, 0.98, clampedCompactness) * smoothstepJS(0.55, 0.95, iceFraction);
+  const graupelness = smoothstepJS(0.28, 0.68, clampedCompactness) * (1.0 - hailness) * smoothstepJS(0.45, 0.95, iceFraction);
+
+  const drySnowScale = mixJS(0.88, 1.10, snowiness);
+  const graupelScale = mixJS(drySnowScale, 1.14, graupelness);
+  const hailScale = mixJS(1.00, 1.32, hailness);
+  const iceScale = mixJS(graupelScale, hailScale, hailness);
+  const mixedScale = mixJS(iceScale, Math.max(1.00, 1.05 + hailness * 0.10), smoothstepJS(0.18, 0.88, liquidFraction));
+
+  if (ice <= 1e-6)
+    return waterEquivalentSize;
+  if (liquid <= 1e-6)
+    return waterEquivalentSize * iceScale;
+  return waterEquivalentSize * mixedScale;
+}
+
+function computeHydrometeorMemberships(waterMass, iceMass, density, size, compactness)
+{
+  const liquid = Math.max(waterMass, 0.0);
+  const ice = Math.max(iceMass, 0.0);
+  const total = liquid + ice;
+  if (total <= 0.0) {
+    return {
+      rain : 0.0,
+      snow : 0.0,
+      graupel : 0.0,
+      hail : 0.0,
+      wetHail : 0.0,
+      melting : 0.0,
+    };
+  }
+
+  const liquidFraction = liquid / Math.max(total, 1e-6);
+  const iceFraction = ice / Math.max(total, 1e-6);
+  const compact = clamp01(compactness);
+  const dryIce = smoothstepJS(0.60, 0.98, iceFraction) * (1.0 - smoothstepJS(0.04, 0.20, liquidFraction));
+
+  let rain = smoothstepJS(0.82, 0.995, liquidFraction) * (1.0 - smoothstepJS(0.05, 0.35, iceFraction));
+  let wetHail = smoothstepJS(0.65, 0.98, iceFraction) * smoothstepJS(0.06, 0.35, liquidFraction) * smoothstepJS(0.78, 1.00, density) *
+                smoothstepJS(0.70, 1.00, compact) * smoothstepJS(0.55, 1.10, size);
+  let hail = dryIce * smoothstepJS(0.82, 1.00, density) * smoothstepJS(0.72, 1.00, compact) * smoothstepJS(0.55, 1.10, size) *
+             (1.0 - smoothstepJS(0.04, 0.16, liquidFraction)) * (1.0 - wetHail);
+  let graupel = dryIce * smoothstepJS(0.38, 0.82, density) * smoothstepJS(0.28, 0.78, compact) * smoothstepJS(0.30, 0.90, size) *
+                (1.0 - hail) * (1.0 - wetHail);
+  let melting = smoothstepJS(0.04, 0.40, liquidFraction) * smoothstepJS(0.30, 0.98, iceFraction) *
+                (1.0 - smoothstepJS(0.76, 1.00, compact) * smoothstepJS(0.82, 1.00, density));
+  let snow = dryIce * (1.0 - smoothstepJS(0.45, 0.78, density)) * (1.0 - smoothstepJS(0.28, 0.72, compact)) *
+             (1.0 - 0.75 * graupel) * (1.0 - 0.70 * melting);
+
+  const sum = rain + snow + graupel + hail + wetHail + melting;
+  if (sum <= 1e-6) {
+    if (liquid >= ice)
+      rain = 1.0;
+    else
+      snow = 1.0;
+    return { rain, snow, graupel : 0.0, hail : 0.0, wetHail : 0.0, melting : 0.0 };
+  }
+
+  const inv = 1.0 / sum;
+  return {
+    rain : rain * inv,
+    snow : snow * inv,
+    graupel : graupel * inv,
+    hail : hail * inv,
+    wetHail : wetHail * inv,
+    melting : melting * inv,
+  };
+}
+
+function dominantHydrometeorLabel(memberships)
+{
+  let label = 'rain';
+  let best = memberships.rain;
+  if (memberships.snow > best) {
+    best = memberships.snow;
+    label = 'snow';
+  }
+  if (memberships.graupel > best) {
+    best = memberships.graupel;
+    label = 'graupel';
+  }
+  if (memberships.hail > best) {
+    best = memberships.hail;
+    label = 'hail';
+  }
+  if (memberships.wetHail > best) {
+    best = memberships.wetHail;
+    label = 'wet hail';
+  }
+  if (memberships.melting > best) {
+    label = 'melting';
+  }
+  return label;
+}
+
+function calcDropletRadarMetrics(waterMass, iceMass, density, size, compactness = inferCompactnessProxy(waterMass, iceMass, density, size))
 {
   const liquid = Math.max(waterMass, 0.0);
   const ice = Math.max(iceMass, 0.0);
@@ -681,20 +803,23 @@ function calcDropletRadarMetrics(waterMass, iceMass, density, size)
       vSize : 0.0,
       flattening : 0.0,
       radarPresence : 0.0,
+      compactness : 0.0,
+      rhoParticle : 0.0,
+      hydrometeors : computeHydrometeorMemberships(0.0, 0.0, 0.0, 0.0, 0.0),
+      dominantType : 'none',
     };
   }
 
   const liquidFraction = liquid / Math.max(total, 1e-6);
   const iceFraction = ice / Math.max(total, 1e-6);
-  const snowiness = Math.min(Math.max((0.95 - density) / 0.83, 0.0), 1.0);
+  const hydro = computeHydrometeorMemberships(liquid, ice, density, size, compactness);
 
-  let flattening = 0.0;
-  if (liquidFraction > 0.7)
-    flattening = Math.min(Math.max((size - 0.45) * 0.35, 0.0), 0.22);
-  else if (liquid > 0.0 && ice > 0.0)
-    flattening = Math.min(Math.max((size - 0.50) * 0.18, 0.0), 0.10);
-  else if (iceFraction > 0.99 && density < 0.95)
-    flattening = Math.min(Math.max((size - 0.60) * 0.08, 0.0), 0.04);
+  const rainFlatten = Math.min(Math.max((size - 0.45) * 0.35, 0.0), 0.22);
+  const mixedFlatten = Math.min(Math.max((size - 0.50) * 0.18, 0.0), 0.10);
+  const snowFlatten = Math.min(Math.max((size - 0.60) * 0.08, 0.0), 0.04);
+  const flattening = rainFlatten * hydro.rain +
+                     mixedFlatten * (hydro.melting * 0.55 + hydro.wetHail * 0.18) +
+                     snowFlatten * (hydro.snow * 0.70 + hydro.graupel * 0.35);
 
   const radarPresence = smoothstepJS(0.12, 0.35, total);
   const waterSize = size * Math.pow(Math.max(liquidFraction, 0.0), 1.0 / 3.0);
@@ -702,17 +827,12 @@ function calcDropletRadarMetrics(waterMass, iceMass, density, size)
 
   const waterMoment = Math.pow(Math.max(waterSize * 0.58, 1e-4), 6.0);
   const iceDensity = Math.min(Math.max(density, 0.12), 1.0);
-  const aggregateBoost = (1.40 * (1.0 - iceDensity)) + (1.10 * iceDensity);
+  const aggregateBoost = mixJS(1.42, 1.08, clamp01(0.35 * compactness + 0.65 * iceDensity));
   const iceRadarSize = iceSize * ((0.42 * (1.0 - iceDensity)) + (0.60 * iceDensity)) * aggregateBoost;
-  const iceCoeff = (0.32 * (1.0 - snowiness)) + (0.14 * snowiness);
+  const iceCoeff = hydro.snow * 0.14 + hydro.graupel * 0.20 + hydro.hail * 0.28 + hydro.wetHail * 0.31 + hydro.melting * 0.22;
   const iceMoment = iceCoeff * Math.pow(Math.max(iceRadarSize, 1e-4), 6.0);
 
-  let brightBand = 0.0;
-  if (liquid > 1e-6 && ice > 1e-6) {
-    const onset = smoothstepJS(0.06, 0.22, liquidFraction);
-    const fade = 1.0 - smoothstepJS(0.45, 0.72, liquidFraction);
-    brightBand = onset * fade * ((0.04 * snowiness) + (0.09 * (1.0 - snowiness)));
-  }
+  const brightBand = hydro.melting * 0.08 + hydro.wetHail * 0.05;
 
   const baseMoment = radarPresence * (waterMoment + iceMoment);
   const zh = baseMoment * (1.0 + brightBand + flattening * 0.04);
@@ -721,38 +841,58 @@ function calcDropletRadarMetrics(waterMass, iceMass, density, size)
 
   const hSize = size * (1.0 + flattening * 0.60);
   const vSize = size * Math.max(1.0 - flattening * 0.75, 0.55);
+  const particleRho = clamp01(
+    hydro.rain * mixJS(0.992, 0.986, smoothstepJS(0.50, 1.80, size)) +
+    hydro.snow * mixJS(0.985, 0.974, smoothstepJS(0.35, 1.30, size)) +
+    hydro.graupel * mixJS(0.964, 0.940, smoothstepJS(0.40, 1.60, size)) +
+    hydro.hail * mixJS(0.950, 0.900, smoothstepJS(0.55, 1.90, size)) +
+    hydro.wetHail * mixJS(0.930, 0.840, smoothstepJS(0.55, 1.90, size)) +
+    hydro.melting * mixJS(0.940, 0.870, smoothstepJS(0.10, 0.45, liquidFraction)) -
+    hydro.rain * flattening * 0.04
+  );
 
   return {
     zh,
     zv,
-    hv : Math.sqrt(Math.max(zh * zv, 0.0)),
+    hv : particleRho * Math.sqrt(Math.max(zh * zv, 0.0)),
     hSize,
     vSize,
     flattening,
     radarPresence,
+    compactness,
+    rhoParticle : particleRho,
+    hydrometeors : hydro,
+    dominantType : dominantHydrometeorLabel(hydro),
   };
 }
 
-function upgradeLegacyPrecipArray(legacyPrecipArray)
+function upgradeLegacyPrecipArray(legacyPrecipArray, loadedValsPerDroplet = legacyValsPerDroplet)
 {
-  if (legacyPrecipArray.length % legacyValsPerDroplet != 0)
+  if (loadedValsPerDroplet == valsPerDroplet)
     return legacyPrecipArray;
 
-  const legacyDropletCount = legacyPrecipArray.length / legacyValsPerDroplet;
+  if (legacyPrecipArray.length % loadedValsPerDroplet != 0)
+    return legacyPrecipArray;
+
+  const legacyDropletCount = legacyPrecipArray.length / loadedValsPerDroplet;
   const upgraded = new Float32Array(legacyDropletCount * valsPerDroplet);
   for (let i = 0; i < legacyDropletCount; i++) {
-    const legacyOffset = i * legacyValsPerDroplet;
+    const legacyOffset = i * loadedValsPerDroplet;
     const upgradedOffset = i * valsPerDroplet;
     const waterMass = legacyPrecipArray[legacyOffset + 2];
     const iceMass = legacyPrecipArray[legacyOffset + 3];
     const density = legacyPrecipArray[legacyOffset + 4];
+    const size = loadedValsPerDroplet >= previousValsPerDroplet && waterMass >= 0.0 ? legacyPrecipArray[legacyOffset + 5] :
+                 (waterMass >= 0.0 ? calcHydrometeorSizeProxy(waterMass, iceMass, density) : 0.0);
+    const compactness = waterMass >= 0.0 ? inferCompactnessProxy(waterMass, iceMass, density, size) : 0.0;
 
     upgraded[upgradedOffset + 0] = legacyPrecipArray[legacyOffset + 0];
     upgraded[upgradedOffset + 1] = legacyPrecipArray[legacyOffset + 1];
     upgraded[upgradedOffset + 2] = waterMass;
     upgraded[upgradedOffset + 3] = iceMass;
     upgraded[upgradedOffset + 4] = density;
-    upgraded[upgradedOffset + 5] = waterMass >= 0.0 ? calcHydrometeorSizeProxy(waterMass, iceMass, density) : 0.0;
+    upgraded[upgradedOffset + 5] = size;
+    upgraded[upgradedOffset + 6] = compactness;
   }
   return upgraded;
 }
@@ -1563,7 +1703,7 @@ async function loadData()
     let versionBuf = await versionBlob.arrayBuffer();
     let version = new Uint32Array(versionBuf)[0];                // convert to Uint32
 
-    if (version == saveFileVersionID || version == previousSaveFileVersionID || version == legacySaveFileVersionID) {
+    if (version == saveFileVersionID || version == previousSaveFileVersionID || version == legacySaveFileVersionID || version == olderLegacySaveFileVersionID) {
       // check version id, only proceed if file has the right version id
       let fileArrBuf = await file.slice(4).arrayBuffer(); // slice from behind version id to
       // the end of the file
@@ -1612,7 +1752,8 @@ async function loadData()
       let wallTexBuf = await wallTexBlob.arrayBuffer();
       let wallTexI8 = new Int8Array(wallTexBuf);
 
-      const loadedValsPerDroplet = version == saveFileVersionID ? valsPerDroplet : legacyValsPerDroplet;
+      const loadedValsPerDroplet = version == saveFileVersionID ? valsPerDroplet :
+                                   version == previousSaveFileVersionID ? previousValsPerDroplet : legacyValsPerDroplet;
 
       sliceStart = sliceEnd;
       sliceEnd += NUM_DROPLETS * Float32Array.BYTES_PER_ELEMENT * loadedValsPerDroplet;
@@ -1620,9 +1761,9 @@ async function loadData()
       let precipArrayBuf = await precipArrayBlob.arrayBuffer();
       let precipArray = new Float32Array(precipArrayBuf);
       if (loadedValsPerDroplet != valsPerDroplet)
-        precipArray = upgradeLegacyPrecipArray(precipArray);
+        precipArray = upgradeLegacyPrecipArray(precipArray, loadedValsPerDroplet);
 
-      if (version == saveFileVersionID || version == previousSaveFileVersionID) {
+      if (version != olderLegacySaveFileVersionID) {
         sliceStart = sliceEnd;
         sliceEnd += 1 * Int16Array.BYTES_PER_ELEMENT; // one 16 bit int indicates number of weather stations
         let numWeatherStationsArrayBlob = dataBlob.slice(sliceStart, sliceEnd);
@@ -1647,7 +1788,7 @@ async function loadData()
 
 
         guiControlsFromSaveFile = await settingsArrayBlob.text();
-      } else if (version == legacySaveFileVersionID) {
+      } else if (version == olderLegacySaveFileVersionID) {
         alert('Save File from older version, settings will not be loaded');
       }
 
@@ -5737,7 +5878,7 @@ var soundingGraph = {
 
   const precipitationVertexShader = await loadShader('precipitationShader.vert');
   const precipitationShader = await loadShader('precipitationShader.frag');
-  const precipitationProgram = createProgram(precipitationVertexShader, precipitationShader, [ 'position_out', 'mass_out', 'density_out', 'size_out' ]);
+  const precipitationProgram = createProgram(precipitationVertexShader, precipitationShader, [ 'position_out', 'mass_out', 'density_out', 'size_out', 'compactness_out' ]);
 
   gl.useProgram(precipitationProgram);
 
@@ -5745,6 +5886,7 @@ var soundingGraph = {
   const massAttribLocation = 1;
   const densityAttribLocation = 2;
   const sizeAttribLocation = 3;
+  const compactnessAttribLocation = 4;
   const dropletStrideBytes = valsPerDroplet * Float32Array.BYTES_PER_ELEMENT;
 
   var even = true; // used to switch between precipitation buffers
@@ -5771,6 +5913,7 @@ var soundingGraph = {
       rainDrops.push(Math.random());         // ice
       rainDrops.push(Math.random());         // density
       rainDrops.push(0.0);                   // size proxy
+      rainDrops.push(0.0);                   // compactness / ice-structure memory
     }
   }
 
@@ -5784,6 +5927,7 @@ var soundingGraph = {
     gl.enableVertexAttribArray(massAttribLocation);
     gl.enableVertexAttribArray(densityAttribLocation);
     gl.enableVertexAttribArray(sizeAttribLocation);
+    gl.enableVertexAttribArray(compactnessAttribLocation);
     gl.vertexAttribPointer(
       dropPositionAttribLocation,         // Attribute location
       2,                                  // Number of elements per attribute
@@ -5817,6 +5961,15 @@ var soundingGraph = {
       gl.FALSE,
       dropletStrideBytes,                 // Size of an individual vertex
       5 * Float32Array.BYTES_PER_ELEMENT  // Offset from the beginning of a
+      // single vertex to this attribute
+    );
+    gl.vertexAttribPointer(
+      compactnessAttribLocation,          // Attribute location
+      1,                                  // Number of elements per attribute
+      gl.FLOAT,                           // Type of elements
+      gl.FALSE,
+      dropletStrideBytes,                 // Size of an individual vertex
+      6 * Float32Array.BYTES_PER_ELEMENT  // Offset from the beginning of a
       // single vertex to this attribute
     );
 
@@ -5836,6 +5989,7 @@ var soundingGraph = {
     gl.enableVertexAttribArray(massAttribLocation);
     gl.enableVertexAttribArray(densityAttribLocation);
     gl.enableVertexAttribArray(sizeAttribLocation);
+    gl.enableVertexAttribArray(compactnessAttribLocation);
     gl.vertexAttribPointer(
       dropPositionAttribLocation,         // Attribute location
       2,                                  // Number of elements per attribute
@@ -5869,6 +6023,15 @@ var soundingGraph = {
       gl.FALSE,
       dropletStrideBytes,                 // Size of an individual vertex
       5 * Float32Array.BYTES_PER_ELEMENT  // Offset from the beginning of a
+      // single vertex to this attribute
+    );
+    gl.vertexAttribPointer(
+      compactnessAttribLocation,          // Attribute location
+      1,                                  // Number of elements per attribute
+      gl.FLOAT,                           // Type of elements
+      gl.FALSE,
+      dropletStrideBytes,                 // Size of an individual vertex
+      6 * Float32Array.BYTES_PER_ELEMENT  // Offset from the beginning of a
       // single vertex to this attribute
     );
 
@@ -5895,7 +6058,7 @@ var soundingGraph = {
 
     // log data of all the droplets within the brush
     let tempDroplets = new Float32Array(valsPerDroplet * NUM_DROPLETS);
-    gl.bindBuffer(gl.TRANSFORM_FEEDBACK_BUFFER, even ? precipVertexBuffer_0 : precipVertexBuffer_1); // x, y, water, ice, density, size
+    gl.bindBuffer(gl.TRANSFORM_FEEDBACK_BUFFER, even ? precipVertexBuffer_0 : precipVertexBuffer_1); // x, y, water, ice, density, size, compactness
     gl.getBufferSubData(gl.TRANSFORM_FEEDBACK_BUFFER, 0, tempDroplets);
 
     console.log(' ');
@@ -5916,13 +6079,14 @@ var soundingGraph = {
       let ice = tempDroplets[i + 3];
       let density = tempDroplets[i + 4];
       let size = tempDroplets[i + 5];
+      let compactness = tempDroplets[i + 6];
 
       let dx = (mouseXinSim - x) * sim_aspect;
       let dy = mouseYinSim - y;
       let dist = Math.sqrt(dx * dx + dy * dy);
 
       if (dist < guiControls.brushSize / 2.0 / sim_res_y && water >= 0) { // if droplet is within the brush and active
-        let radarMetrics = calcDropletRadarMetrics(water, ice, density, size);
+        let radarMetrics = calcDropletRadarMetrics(water, ice, density, size, compactness);
         console.log('n:', n);
         console.log('x:', x);
         console.log('y:', y);
@@ -5930,9 +6094,13 @@ var soundingGraph = {
         console.log('Ice:', ice);
         console.log('Density:', density);
         console.log('Size:', size);
+        console.log('Compactness:', compactness);
         console.log('Zh:', radarMetrics.zh);
         console.log('Zv:', radarMetrics.zv);
         console.log('HV:', radarMetrics.hv);
+        console.log('rho_i:', radarMetrics.rhoParticle);
+        console.log('Type:', radarMetrics.dominantType);
+        console.log('Hydrometeors:', radarMetrics.hydrometeors);
         console.log('H size:', radarMetrics.hSize);
         console.log('V size:', radarMetrics.vSize);
         console.log('Flattening:', radarMetrics.flattening);
@@ -6041,8 +6209,8 @@ var soundingGraph = {
   const waterTexture_1 = gl.createTexture();
   const reflectivitySnapshotTex = gl.createTexture();
   const phaseTexture = gl.createTexture();           // liquid/ice sums
-  const phaseStatsTexture = gl.createTexture();      // Zh/Zv ratio stats for rhohv
-  const radarMomentsTexture = gl.createTexture();    // Zh, Zv, sumHV, count
+  const phaseStatsTexture = gl.createTexture();      // rho_i / irregularity stats for rhohv
+  const radarMomentsTexture = gl.createTexture();    // Zh, Zv, HV, count
   const radarMomentsSnapshotTex = gl.createTexture();
   const rhohvSnapshotTex = gl.createTexture();
   const radarFieldTexture_0 = gl.createTexture();    // smoothed radar field
@@ -6150,7 +6318,7 @@ var soundingGraph = {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 
-    // live Zh/Zv ratio stats for rhohv
+    // live rho_i / irregularity stats for rhohv
     gl.bindTexture(gl.TEXTURE_2D, phaseStatsTexture);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
@@ -7168,7 +7336,7 @@ var soundingGraph = {
     // Follow droplet
     if (dropletFollowID >= 0) {
       let dropletInfo = readDropletData(dropletFollowID);
-      let radarMetrics = calcDropletRadarMetrics(dropletInfo[2], dropletInfo[3], dropletInfo[4], dropletInfo[5]);
+      let radarMetrics = calcDropletRadarMetrics(dropletInfo[2], dropletInfo[3], dropletInfo[4], dropletInfo[5], dropletInfo[6]);
       cam.setPosition(-dropletInfo[0] * 2.0 + 1.0, -dropletInfo[1] * 2.0 * (sim_res_y / sim_res_x) + (sim_res_y / sim_res_x));
 
       let dropletInfoCanvas = document.getElementById('dropletInfoCanvas');
@@ -7190,14 +7358,18 @@ var soundingGraph = {
       ctx.fillText('Dens: ' + dropletInfo[4].toFixed(2), 0, 42);
       ctx.fillStyle = '#FFD400';
       ctx.fillText('Size: ' + dropletInfo[5].toFixed(2), 0, 56);
+      ctx.fillStyle = '#B8B8FF';
+      ctx.fillText('Comp: ' + dropletInfo[6].toFixed(2), 0, 70);
       ctx.fillStyle = '#FF8A00';
-      ctx.fillText('Zh: ' + radarMetrics.zh.toExponential(1), 0, 70);
+      ctx.fillText('Zh: ' + radarMetrics.zh.toExponential(1), 0, 84);
       ctx.fillStyle = '#FFCC00';
-      ctx.fillText('Zv: ' + radarMetrics.zv.toExponential(1), 0, 84);
+      ctx.fillText('Zv: ' + radarMetrics.zv.toExponential(1), 0, 98);
       ctx.fillStyle = '#FF66CC';
-      ctx.fillText('HV: ' + radarMetrics.hv.toExponential(1), 0, 98);
-      ctx.fillStyle = '#C0C0FF';
-      ctx.fillText('H/V sz: ' + radarMetrics.hSize.toFixed(2) + ' / ' + radarMetrics.vSize.toFixed(2), 0, 112);
+      ctx.fillText('HV: ' + radarMetrics.hv.toExponential(1), 0, 112);
+      ctx.fillStyle = '#FF99FF';
+      ctx.fillText('rho_i: ' + radarMetrics.rhoParticle.toFixed(3), 0, 126);
+      ctx.fillStyle = '#E8E8E8';
+      ctx.fillText('Type: ' + radarMetrics.dominantType, 0, 140);
     }
 
     if (airplaneMode) {

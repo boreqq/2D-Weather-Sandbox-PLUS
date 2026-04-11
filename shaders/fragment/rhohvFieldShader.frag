@@ -36,8 +36,12 @@ void main()
   float sumZv = 0.0;
   float sumHV = 0.0;
   float count = 0.0;
-  float ratioSum = 0.0;
-  float ratioSqSum = 0.0;
+  float rhoParticleSum = 0.0;
+  float rhoParticleSqSum = 0.0;
+  float irregularitySum = 0.0;
+  float validCells = 0.0;
+  float echoCells = 0.0;
+  float meanEchoSignalAccum = 0.0;
 
   for (int oy = 0; oy < MAX_BIN_SIZE; oy++) {
     if (oy >= bin)
@@ -53,15 +57,22 @@ void main()
       ivec2 wallCell = texelFetch(wallTex, cell, 0).xy;
       if (wallCell[DISTANCE] == 0)
         continue;
+      validCells += 1.0;
 
       vec4 moments = texelFetch(radarMomentsTex, cell, 0);
       vec4 stats = texelFetch(phaseStatsTex, cell, 0);
+      float cellSignal = max(moments.r, moments.g);
       sumZh += max(moments.r, 0.0);
       sumZv += max(moments.g, 0.0);
       sumHV += max(moments.b, 0.0);
       count += max(moments.a, 0.0);
-      ratioSum += stats.r;
-      ratioSqSum += max(stats.g, 0.0);
+      rhoParticleSum += max(stats.r, 0.0);
+      rhoParticleSqSum += max(stats.g, 0.0);
+      irregularitySum += max(stats.a, 0.0);
+      if (cellSignal > 2e-6) {
+        echoCells += 1.0;
+        meanEchoSignalAccum += cellSignal;
+      }
     }
   }
 
@@ -75,21 +86,29 @@ void main()
   rhoRaw = clamp(rhoRaw, 0.0, 1.0);
 
   float safeCount = max(count, 1.0);
-  float ratioMean = ratioSum / safeCount;
-  float ratioVar = max(ratioSqSum / safeCount - ratioMean * ratioMean, 0.0);
-  float ratioSpread = sqrt(ratioVar);
+  float rhoParticleMean = rhoParticleSum / safeCount;
+  float rhoParticleVar = max(rhoParticleSqSum / safeCount - rhoParticleMean * rhoParticleMean, 0.0);
+  float rhoParticleStd = sqrt(rhoParticleVar);
+  float irregularityMean = irregularitySum / safeCount;
+  float fillFraction = echoCells / max(validCells, 1.0);
+  float meanEchoSignal = meanEchoSignalAccum / max(echoCells, 1.0);
+  float partialFill = 1.0 - smoothstep(0.03, 0.18, fillFraction);
 
-  float rhoCore = clamp(rhoRaw * exp(-10.0 * ratioVar), 0.0, 1.0);
+  float rhoCore = clamp(rhoRaw - rhoParticleStd * 0.10 - irregularityMean * 0.03, 0.0, 1.0);
 
   // Sparse bins in this superparticle model should collapse toward high CC
   // instead of producing isolated low-value pixels.
-  float confidence = smoothstep(2.0, 8.0, count);
-  float rho = mix(1.0, rhoCore, confidence);
+  float signalConfidence = smoothstep(2e-6, 3e-4, signal);
+  float countConfidence = smoothstep(1.5, 4.5, count);
+  float confidence = max(signalConfidence, countConfidence);
+  float rho = mix(min(1.0, rhoCore + 0.035), rhoCore, confidence);
 
-  float edgeBoost = 0.05 * (1.0 - confidence) * (1.0 - smoothstep(4e-5, 4e-3, signal));
-  float binNoise = (rand2d(vec2(binBase)) - 0.5) * 0.008;
+  float edgeSignalWindow = smoothstep(4e-6, 6e-5, meanEchoSignal) * (1.0 - smoothstep(2.0e-4, 1.0e-3, meanEchoSignal));
+  float edgeBoost = 0.030 * partialFill * edgeSignalWindow * (1.0 - smoothstep(2.5, 7.0, count));
+  edgeBoost += 0.012 * (1.0 - confidence) * (1.0 - smoothstep(4e-5, 4e-3, signal));
+  float binNoise = (rand2d(vec2(binBase)) - 0.5) * 0.004;
   rho = clamp(rho + edgeBoost + binNoise, 0.0, 1.05);
 
   float valid = step(2e-6, signal);
-  fragmentColor = vec4(rho, rhoRaw, ratioSpread, valid);
+  fragmentColor = vec4(rho, rhoRaw, irregularityMean, valid);
 }

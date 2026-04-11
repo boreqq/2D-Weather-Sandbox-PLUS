@@ -6,12 +6,14 @@ layout(location = 0) in vec2 dropPosition;
 layout(location = 1) in vec2 mass; //[0] water   [1] ice
 layout(location = 2) in float density;
 layout(location = 3) in float size;
+layout(location = 4) in float compactness;
 
 // transform feedback varyings:
 out vec2 position_out;
 out vec2 mass_out;
 out float density_out;
 out float size_out;
+out float compactness_out;
 
 // via fragmentshader to feedback framebuffers for feedback to fluid
 out vec4 feedback;
@@ -55,6 +57,7 @@ vec2 newPos;
 vec2 newMass;
 float newDensity;
 float newSize;
+float newCompactness;
 
 bool isActive = true;
 bool spawned = false; // spawned in this iteration
@@ -65,9 +68,10 @@ void disableDroplet()
   newMass[WATER] = -2. - dropPosition.x; // disable droplet by making it negative and save position as seed for respawning
   newMass[ICE] = dropPosition.y;         // save position as seed for random function when respawning later
   newSize = 0.0;
+  newCompactness = 0.0;
 }
 
-float calcHydrometeorSize(vec2 hydromass, float hydrodensity)
+float calcHydrometeorSize(vec2 hydromass, float hydrodensity, float hydroCompactness)
 {
   float liquid = max(hydromass[WATER], 0.0);
   float ice = max(hydromass[ICE], 0.0);
@@ -78,23 +82,26 @@ float calcHydrometeorSize(vec2 hydromass, float hydrodensity)
   float iceFraction = ice / max(totalMass, 1e-6);
   float liquidFraction = liquid / max(totalMass, 1e-6);
   float clampedDensity = clamp(hydrodensity, 0.12, 1.0);
+  float clampedCompactness = clamp(hydroCompactness, 0.0, 1.0);
 
   // Base size is water-equivalent. This avoids low-density snow blowing up to
   // unrealistically huge diameters while still allowing hail to become larger.
   float waterEquivalentSize = pow(totalMass, 1.0 / 3.0);
 
-  float snowiness = clamp((0.72 - clampedDensity) / 0.42, 0.0, 1.0);
-  float hailness = smoothstep(0.80, 0.98, clampedDensity) * smoothstep(0.55, 0.95, iceFraction);
+  float snowiness = clamp((0.72 - clampedDensity) / 0.42, 0.0, 1.0) * (1.0 - smoothstep(0.28, 0.72, clampedCompactness));
+  float hailness = smoothstep(0.72, 0.98, clampedCompactness) * smoothstep(0.55, 0.95, iceFraction);
+  float graupelness = smoothstep(0.28, 0.68, clampedCompactness) * (1.0 - hailness) * smoothstep(0.45, 0.95, iceFraction);
 
   // Ordinary snow should stay relatively small, aggregates only modestly larger,
   // while dense ice / hail can exceed rain size.
-  float drySnowScale = mix(0.88, 1.08, snowiness);
-  float hailScale = mix(1.02, 1.38, hailness);
-  float iceScale = mix(drySnowScale, hailScale, hailness);
+  float drySnowScale = mix(0.88, 1.10, snowiness);
+  float graupelScale = mix(drySnowScale, 1.14, graupelness);
+  float hailScale = mix(1.00, 1.32, hailness);
+  float iceScale = mix(graupelScale, hailScale, hailness);
 
   // Keep the melting layer transition gentle so particles do not collapse in size
   // the moment they start melting.
-  float mixedScale = mix(iceScale, max(1.00, 1.06 + hailness * 0.10), smoothstep(0.18, 0.88, liquidFraction));
+  float mixedScale = mix(iceScale, max(1.00, 1.05 + hailness * 0.10), smoothstep(0.18, 0.88, liquidFraction));
 
   if (ice <= 1e-6)
     return waterEquivalentSize;
@@ -109,6 +116,7 @@ void main()
   newMass = mass;         // amount of water and ice carried
   newDensity = density;   // determines fall speed
   newSize = size;         // hydrometeor size proxy for radar moments
+  newCompactness = compactness; // remembers how rimed / compact the ice core is
 
   if (mass[WATER] < 0.) { // inactive
                           /*
@@ -158,7 +166,8 @@ void main()
           newMass[ICE] = initalMass;                                     // snow
           feedback[HEAT] += newMass[ICE] * meltingHeat;                  // add heat of freezing
           newDensity = snowDensity;
-          newSize = calcHydrometeorSize(newMass, newDensity);
+          newCompactness = 0.12;
+          newSize = calcHydrometeorSize(newMass, newDensity, newCompactness);
 
           vec4 lightningData = texture(lightningDataTex, vec2(0.5)); // data from last lightning bolt
 
@@ -184,7 +193,8 @@ void main()
           newMass[WATER] = initalMass; // rain
           newMass[ICE] = 0.0;
           newDensity = 1.0;
-          newSize = calcHydrometeorSize(newMass, newDensity);
+          newCompactness = 1.0;
+          newSize = calcHydrometeorSize(newMass, newDensity, newCompactness);
         }
         feedback[VAPOR] -= initalMass;
       }
@@ -244,9 +254,14 @@ void main()
 
       float growth = water[CLOUD] * growthRate * surfaceArea;
 
+      float hailAccretion = 0.0;
+      float freezing = 0.0;
+      float melting = 0.0;
+
       // Hail growth enhancement:
-      if (realTemp < CtoK(0.0) && water[CLOUD] > 0.0 && density == 1.0) { // below freezing
-        growth += surfaceArea * water[PRECIPITATION] * 0.0030;            // rain freezing onto hail
+      if (realTemp < CtoK(0.0) && water[CLOUD] > 0.0 && newMass[ICE] > 0.0 && newDensity > 0.78 && newCompactness > 0.70) { // below freezing
+        hailAccretion = surfaceArea * water[PRECIPITATION] * 0.0030;
+        growth += hailAccretion;                                           // rain freezing onto hail
       }
 
       feedback[VAPOR] -= growth * 1.0; // takes water from the air
@@ -257,7 +272,7 @@ void main()
         newMass[ICE] += growth;   // ice growth
         feedback[HEAT] += growth * meltingHeat;
 
-        float freezing = min((CtoK(0.0) - realTemp) * freezingRate * surfaceArea, newMass[WATER]); // rain freezing
+        freezing = min((CtoK(0.0) - realTemp) * freezingRate * surfaceArea, newMass[WATER]); // rain freezing
         newMass[WATER] -= freezing;
         newMass[ICE] += freezing;
         feedback[HEAT] += freezing * meltingHeat;
@@ -265,7 +280,7 @@ void main()
       } else {                                                                                                    // above freezing
         newMass[WATER] += growth;                                                                                 // water growth
 
-        float melting = min((realTemp - CtoK(0.0)) * meltingRate * surfaceArea /* / newDensity */, newMass[ICE]); // 0.0002 snow / hail melting
+        melting = min((realTemp - CtoK(0.0)) * meltingRate * surfaceArea /* / newDensity */, newMass[ICE]); // 0.0002 snow / hail melting
         newMass[ICE] -= melting;
         newMass[WATER] += melting;
         feedback[HEAT] -= melting * meltingHeat;
@@ -295,8 +310,42 @@ void main()
       feedback[HEAT] -= subli * evapHeat;
       feedback[HEAT] -= subli * meltingHeat;
 
-      float targetSize = calcHydrometeorSize(newMass, newDensity);
-      float liquidFractionPost = newMass[WATER] / max(newMass[WATER] + newMass[ICE], 1e-6);
+      float totalMassPost = newMass[WATER] + newMass[ICE];
+      float liquidFractionPost = newMass[WATER] / max(totalMassPost, 1e-6);
+
+      if (newMass[ICE] > 1e-6) {
+        if (realTemp < CtoK(0.0)) {
+          float massNorm = max(totalMassPost, 1e-6);
+          float growthNorm = growth / massNorm;
+          float freezingNorm = freezing / massNorm;
+          float hailNorm = hailAccretion / massNorm;
+          float dryIceCore = smoothstep(0.90, 0.995, newMass[ICE] / max(totalMassPost, 1e-6)) *
+                             (1.0 - smoothstep(0.02, 0.12, liquidFractionPost)) *
+                             smoothstep(0.82, 1.00, newDensity);
+          float hailCoreBoost = dryIceCore * smoothstep(0.80, 1.50, max(newSize, 0.0));
+          float compactnessTarget = clamp(
+            0.12 +
+            smoothstep(0.45, 0.98, newDensity) * 0.38 +
+            growthNorm * 0.15 +
+            freezingNorm * 0.55 +
+            hailNorm * 1.30 +
+            hailCoreBoost * 0.42,
+            0.05, 1.0
+          );
+          float compactnessRate = clamp(0.04 + freezingNorm * 0.80 + hailNorm * 1.15 + hailCoreBoost * 0.28, 0.0, 1.0);
+          newCompactness = mix(newCompactness, compactnessTarget, compactnessRate);
+          newCompactness = max(newCompactness, hailCoreBoost * mix(0.58, 0.92, hailCoreBoost));
+          if (newMass[WATER] <= 1e-6 && newDensity < 0.55)
+            newCompactness = mix(newCompactness, 0.12, 0.03);
+        } else {
+          float meltRetention = 1.0 - smoothstep(0.70, 1.00, liquidFractionPost) * 0.08;
+          newCompactness = clamp(max(newCompactness * meltRetention, 0.05), 0.05, 1.0);
+        }
+      } else {
+        newCompactness = 1.0;
+      }
+
+      float targetSize = calcHydrometeorSize(newMass, newDensity, newCompactness);
       float sizeAdjustRate = 0.20;
       if (newMass[WATER] > 1e-6 && newMass[ICE] > 1e-6)
         sizeAdjustRate = mix(0.18, 0.32, smoothstep(0.10, 0.75, liquidFractionPost));
@@ -353,4 +402,5 @@ void main()
   mass_out = newMass;
   density_out = max(newDensity, 0.);
   size_out = max(newSize, 0.);
+  compactness_out = clamp(newCompactness, 0.0, 1.0);
 }

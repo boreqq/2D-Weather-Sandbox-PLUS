@@ -6,6 +6,7 @@ in vec2 position_out;
 in vec2 mass_out;
 in float density_out;
 in float size_out;
+in float compactness_out;
 
 uniform int precipDisplayMode; // 0 default droplet overlay, 1 particle-size view
 
@@ -45,6 +46,47 @@ vec3 sizeColor(float particleSize)
   return cols[n - 1];
 }
 
+void hydrometeorMemberships(float liquid, float ice, float density, float size, float compactness, out vec4 primary, out vec2 secondary)
+{
+  float total = liquid + ice;
+  if (total <= 0.0) {
+    primary = vec4(0.0);
+    secondary = vec2(0.0);
+    return;
+  }
+
+  float liquidFraction = liquid / max(total, 1e-6);
+  float iceFraction = ice / max(total, 1e-6);
+  float compact = clamp(compactness, 0.0, 1.0);
+  float dryIce = smoothstep(0.60, 0.98, iceFraction) * (1.0 - smoothstep(0.04, 0.20, liquidFraction));
+
+  float rain = smoothstep(0.82, 0.995, liquidFraction) * (1.0 - smoothstep(0.05, 0.35, iceFraction));
+  float wetHail = smoothstep(0.65, 0.98, iceFraction) * smoothstep(0.06, 0.35, liquidFraction) * smoothstep(0.78, 1.00, density) *
+                  smoothstep(0.70, 1.00, compact) * smoothstep(0.55, 1.10, size);
+  float hail = dryIce * smoothstep(0.82, 1.00, density) * smoothstep(0.72, 1.00, compact) * smoothstep(0.55, 1.10, size) *
+               (1.0 - smoothstep(0.04, 0.16, liquidFraction)) * (1.0 - wetHail);
+  float graupel = dryIce * smoothstep(0.38, 0.82, density) * smoothstep(0.28, 0.78, compact) * smoothstep(0.30, 0.90, size) *
+                  (1.0 - hail) * (1.0 - wetHail);
+  float melting = smoothstep(0.04, 0.40, liquidFraction) * smoothstep(0.30, 0.98, iceFraction) *
+                  (1.0 - smoothstep(0.76, 1.00, compact) * smoothstep(0.82, 1.00, density));
+  float snow = dryIce * (1.0 - smoothstep(0.45, 0.78, density)) * (1.0 - smoothstep(0.28, 0.72, compact)) *
+               (1.0 - 0.75 * graupel) * (1.0 - 0.70 * melting);
+
+  float sum = rain + snow + graupel + hail + wetHail + melting;
+  if (sum <= 1e-6) {
+    rain = step(ice, liquid);
+    snow = 1.0 - rain;
+    graupel = 0.0;
+    hail = 0.0;
+    wetHail = 0.0;
+    melting = 0.0;
+    sum = 1.0;
+  }
+
+  primary = vec4(rain, snow, graupel, hail) / sum;
+  secondary = vec2(wetHail, melting) / sum;
+}
+
 void main()
 {
   if (mass_out[WATER] < 0.)
@@ -70,16 +112,22 @@ void main()
   float opacity = (mass_out[WATER] + mass_out[ICE]) * 0.10;
   opacity *= spriteMask;
 
-  if (mass_out[ICE] > 0.) {                           // has ice
-    if (mass_out[WATER] == 0.) {                      // has no liquid water, pure ice
-      if (density_out < 1.0)                          // snow
-        fragmentColor = vec4(1.0, 1.0, 1.0, opacity); // white
-      else
-        fragmentColor = vec4(1.0, 1.0, 0.0, opacity); // hail
-    } else {                                          // mix of ice and water
-      fragmentColor = vec4(0.5, 1.0, 1.0, opacity);   // light blue
-    }
-  } else {                                            // rain
-    fragmentColor = vec4(0.0, 0.5, 1.0, opacity);     // dark blue
-  }
+  vec4 primary;
+  vec2 secondary;
+  hydrometeorMemberships(max(mass_out[WATER], 0.0), max(mass_out[ICE], 0.0), density_out, max(size_out, 0.0), compactness_out, primary, secondary);
+
+  vec3 rainColor = vec3(0.0, 0.5, 1.0);
+  vec3 snowColor = vec3(1.0);
+  vec3 graupelColor = vec3(0.92, 0.86, 0.62);
+  vec3 hailColor = vec3(1.0, 0.96, 0.10);
+  vec3 wetHailColor = vec3(1.0, 0.58, 0.12);
+  vec3 meltingColor = vec3(0.5, 1.0, 1.0);
+  vec3 hydrometeorColor = rainColor * primary.r +
+                          snowColor * primary.g +
+                          graupelColor * primary.b +
+                          hailColor * primary.a +
+                          wetHailColor * secondary.r +
+                          meltingColor * secondary.g;
+
+  fragmentColor = vec4(hydrometeorColor, opacity);
 }
