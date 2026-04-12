@@ -410,6 +410,8 @@ const guiControls_default = {
   rhohvBackground : true,
   debugRhohv : false,
   rhohvPixelSize : 8,
+  rhohvLowCCArtifacts : true,
+  rhohvClutterDensity : 1.0,
   reflectivityRefreshSec : 2.0,
   radarProduct : 'RADAR_REFLECTIVITY', // legacy save compatibility only
   realDewPoint : false, // show real dew point in graph, instead of dew point with cloud water included
@@ -440,6 +442,9 @@ var sunIsUp = true;
 var airplaneMode = false;
 
 var dropletFollowID = -1;
+var reflectivityDbgEl;
+var lastReflectivitySnapshotTime = -Infinity;
+var radarRefreshNoiseTick = 0;
 
 var minShadowLight = 0.02;
 
@@ -4492,6 +4497,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       .listen();
 
     var rhohv_folder = datGui.addFolder('Correlation Coefficient');
+    rhohv_folder.add(guiControls, 'rhohvLowCCArtifacts').name('Low CC Artifacts').listen();
+    rhohv_folder.add(guiControls, 'rhohvClutterDensity', 0.0, 3.0, 0.01).name('Clutter Density').listen();
     rhohv_folder.add(guiControls, 'rhohvBackground').name('ρhv Background').listen();
     rhohv_folder.add(guiControls, 'debugRhohv').name('Debug ρhv at Cursor').listen();
     rhohv_folder.add(guiControls, 'rhohvPixelSize', 1, 32, 1)
@@ -4523,6 +4530,11 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   await loadingBar.set(3, 'Initializing Sounding Graph');
   // END OF GUI
+
+  let boundaryProgram;
+  let lightingProgram;
+  let skyBackgroundDisplayProgram;
+  let realisticDisplayProgram;
 
   function startSimulation()
   {
@@ -5616,9 +5628,9 @@ var soundingGraph = {
   const advectionProgram = createProgram(simVertexShader, advectionShader);
   const curlProgram = createProgram(simVertexShader, curlShader);
   const vorticityProgram = createProgram(simVertexShader, vorticityShader);
-  const boundaryProgram = createProgram(simVertexShader, boundaryShader);
+  boundaryProgram = createProgram(simVertexShader, boundaryShader);
 
-  const lightingProgram = createProgram(simVertexShader, lightingShader);
+  lightingProgram = createProgram(simVertexShader, lightingShader);
 
   const lightningLocationProgram = createProgram(simVertexShader, lightningLocationShader);
   const radarFieldUpdateProgram = createProgram(simVertexShader, radarFieldUpdateShader);
@@ -5632,8 +5644,8 @@ var soundingGraph = {
   const rhohvFieldProgram = createProgram(simVertexShader, rhohvFieldShader);
   const rhohvDisplayProgram = createProgram(dispVertexShader, rhohvDisplayShader);
   const universalDisplayProgram = createProgram(dispVertexShader, universalDisplayShader);
-  const skyBackgroundDisplayProgram = createProgram(realDispVertexShader, skyBackgroundDisplayShader);
-  const realisticDisplayProgram = createProgram(realDispVertexShader, realisticDisplayShader);
+  skyBackgroundDisplayProgram = createProgram(realDispVertexShader, skyBackgroundDisplayShader);
+  realisticDisplayProgram = createProgram(realDispVertexShader, realisticDisplayShader);
   const IRtempDisplayProgram = createProgram(dispVertexShader, IRtempDisplayShader);
 
   const postProcessingProgram = createProgram(postProcessingVertexShader, postProcessingShader);
@@ -6283,6 +6295,7 @@ var soundingGraph = {
     gl.bindVertexArray(fluidVao);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     lastReflectivitySnapshotTime = now;
+    radarRefreshNoiseTick += 1.0;
     radarNeedsMeasure = true; // trigger radar updates after new snapshot
   }
 
@@ -6670,6 +6683,10 @@ var soundingGraph = {
   gl.uniform2f(gl.getUniformLocation(rhohvDisplayProgram, 'resolution'), sim_res_x, sim_res_y);
   gl.uniform2f(gl.getUniformLocation(rhohvDisplayProgram, 'texelSize'), texelSizeX, texelSizeY);
   gl.uniform1i(gl.getUniformLocation(rhohvDisplayProgram, 'rhohvTex'), 4);
+  gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'binSize'), Math.max(1.0, Math.round(guiControls.rhohvPixelSize)));
+  gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'radarRefreshTick'), radarRefreshNoiseTick);
+  gl.uniform1i(gl.getUniformLocation(rhohvDisplayProgram, 'showLowCCArtifacts'), guiControls.rhohvLowCCArtifacts ? 1 : 0);
+  gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'clutterDensity'), guiControls.rhohvClutterDensity);
 
   gl.useProgram(radarFieldUpdateProgram);
   gl.uniform2f(gl.getUniformLocation(radarFieldUpdateProgram, 'resolution'), sim_res_x, sim_res_y);
@@ -7603,6 +7620,10 @@ var soundingGraph = {
         gl.uniform3f(gl.getUniformLocation(rhohvDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
         gl.uniform4f(gl.getUniformLocation(rhohvDisplayProgram, 'cursor'), mouseXinSim, mouseYinSim, guiControls.brushSize * 0.5, cursorType);
         gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'Xmult'), horizontalDisplayMult);
+        gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'binSize'), Math.max(1.0, Math.round(guiControls.rhohvPixelSize)));
+        gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'radarRefreshTick'), radarRefreshNoiseTick);
+        gl.uniform1i(gl.getUniformLocation(rhohvDisplayProgram, 'showLowCCArtifacts'), guiControls.rhohvLowCCArtifacts ? 1 : 0);
+        gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'clutterDensity'), guiControls.rhohvClutterDensity);
         gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'productAlpha'), 0.76);
         gl.uniform1i(gl.getUniformLocation(rhohvDisplayProgram, 'productOpaque'), guiControls.rhohvBackground ? 1 : 0);
         gl.activeTexture(gl.TEXTURE4);
@@ -7749,6 +7770,10 @@ var soundingGraph = {
         gl.uniform3f(gl.getUniformLocation(rhohvDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
         gl.uniform4f(gl.getUniformLocation(rhohvDisplayProgram, 'cursor'), mouseXinSim, mouseYinSim, guiControls.brushSize * 0.5, cursorType);
         gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'Xmult'), horizontalDisplayMult);
+        gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'binSize'), Math.max(1.0, Math.round(guiControls.rhohvPixelSize)));
+        gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'radarRefreshTick'), radarRefreshNoiseTick);
+        gl.uniform1i(gl.getUniformLocation(rhohvDisplayProgram, 'showLowCCArtifacts'), guiControls.rhohvLowCCArtifacts ? 1 : 0);
+        gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'clutterDensity'), guiControls.rhohvClutterDensity);
         gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'productAlpha'), 0.76);
         gl.uniform1i(gl.getUniformLocation(rhohvDisplayProgram, 'productOpaque'), 0);
         gl.activeTexture(gl.TEXTURE4);
@@ -7862,16 +7887,18 @@ var soundingGraph = {
 
     minShadowLight = map_range_C(Math.abs(solarZenithAngleDeg), 100.0, 85.0, 0.005, 0.040); // decrease until the sun goes 10 deg below the horizon
 
-    gl.useProgram(boundaryProgram);
-    gl.uniform1f(gl.getUniformLocation(boundaryProgram, 'sunAngle'), solarZenithAngle);
-    gl.useProgram(lightingProgram);
-    gl.uniform1f(gl.getUniformLocation(lightingProgram, 'sunIntensity'), sunIntensity);
-    gl.uniform1f(gl.getUniformLocation(lightingProgram, 'sunAngle'), solarZenithAngle);
-    gl.useProgram(realisticDisplayProgram);
-    gl.uniform1f(gl.getUniformLocation(realisticDisplayProgram, 'sunAngle'), solarZenithAngle);
-    gl.uniform1f(gl.getUniformLocation(realisticDisplayProgram, 'minShadowLight'), minShadowLight);
-    gl.useProgram(skyBackgroundDisplayProgram);
-    gl.uniform1f(gl.getUniformLocation(skyBackgroundDisplayProgram, 'minShadowLight'), minShadowLight);
+    if (boundaryProgram && lightingProgram && realisticDisplayProgram && skyBackgroundDisplayProgram) {
+      gl.useProgram(boundaryProgram);
+      gl.uniform1f(gl.getUniformLocation(boundaryProgram, 'sunAngle'), solarZenithAngle);
+      gl.useProgram(lightingProgram);
+      gl.uniform1f(gl.getUniformLocation(lightingProgram, 'sunIntensity'), sunIntensity);
+      gl.uniform1f(gl.getUniformLocation(lightingProgram, 'sunAngle'), solarZenithAngle);
+      gl.useProgram(realisticDisplayProgram);
+      gl.uniform1f(gl.getUniformLocation(realisticDisplayProgram, 'sunAngle'), solarZenithAngle);
+      gl.uniform1f(gl.getUniformLocation(realisticDisplayProgram, 'minShadowLight'), minShadowLight);
+      gl.useProgram(skyBackgroundDisplayProgram);
+      gl.uniform1f(gl.getUniformLocation(skyBackgroundDisplayProgram, 'minShadowLight'), minShadowLight);
+    }
 
     if (guiControls.dayNightCycle)
       clockEl.innerHTML = dateTimeStr(); // update clock

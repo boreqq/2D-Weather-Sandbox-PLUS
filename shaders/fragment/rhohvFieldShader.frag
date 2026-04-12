@@ -39,9 +39,6 @@ void main()
   float rhoParticleSum = 0.0;
   float rhoParticleSqSum = 0.0;
   float irregularitySum = 0.0;
-  float validCells = 0.0;
-  float echoCells = 0.0;
-  float meanEchoSignalAccum = 0.0;
 
   for (int oy = 0; oy < MAX_BIN_SIZE; oy++) {
     if (oy >= bin)
@@ -57,11 +54,9 @@ void main()
       ivec2 wallCell = texelFetch(wallTex, cell, 0).xy;
       if (wallCell[DISTANCE] == 0)
         continue;
-      validCells += 1.0;
 
       vec4 moments = texelFetch(radarMomentsTex, cell, 0);
       vec4 stats = texelFetch(phaseStatsTex, cell, 0);
-      float cellSignal = max(moments.r, moments.g);
       sumZh += max(moments.r, 0.0);
       sumZv += max(moments.g, 0.0);
       sumHV += max(moments.b, 0.0);
@@ -69,10 +64,6 @@ void main()
       rhoParticleSum += max(stats.r, 0.0);
       rhoParticleSqSum += max(stats.g, 0.0);
       irregularitySum += max(stats.a, 0.0);
-      if (cellSignal > 2e-6) {
-        echoCells += 1.0;
-        meanEchoSignalAccum += cellSignal;
-      }
     }
   }
 
@@ -82,33 +73,32 @@ void main()
     return;
   }
 
-  float rhoRaw = sumHV / sqrt(max(sumZh * sumZv, 1e-12));
-  rhoRaw = clamp(rhoRaw, 0.0, 1.0);
+  float rhoPrecip = sumHV / sqrt(max(sumZh * sumZv, 1e-12));
+  rhoPrecip = clamp(rhoPrecip, 0.0, 1.0);
 
   float safeCount = max(count, 1.0);
   float rhoParticleMean = rhoParticleSum / safeCount;
   float rhoParticleVar = max(rhoParticleSqSum / safeCount - rhoParticleMean * rhoParticleMean, 0.0);
   float rhoParticleStd = sqrt(rhoParticleVar);
   float irregularityMean = irregularitySum / safeCount;
-  float fillFraction = echoCells / max(validCells, 1.0);
-  float meanEchoSignal = meanEchoSignalAccum / max(echoCells, 1.0);
-  float partialFill = 1.0 - smoothstep(0.03, 0.18, fillFraction);
 
-  float rhoCore = clamp(rhoRaw - rhoParticleStd * 0.10 - irregularityMean * 0.03, 0.0, 1.0);
+  float rhoCore = clamp(rhoPrecip - rhoParticleStd * 0.10 - irregularityMean * 0.03, 0.0, 1.0);
 
-  // Sparse bins in this superparticle model should collapse toward high CC
-  // instead of producing isolated low-value pixels.
   float signalConfidence = smoothstep(2e-6, 3e-4, signal);
   float countConfidence = smoothstep(1.5, 4.5, count);
   float confidence = max(signalConfidence, countConfidence);
-  float rho = mix(min(1.0, rhoCore + 0.035), rhoCore, confidence);
 
-  float edgeSignalWindow = smoothstep(4e-6, 6e-5, meanEchoSignal) * (1.0 - smoothstep(2.0e-4, 1.0e-3, meanEchoSignal));
-  float edgeBoost = 0.030 * partialFill * edgeSignalWindow * (1.0 - smoothstep(2.5, 7.0, count));
-  edgeBoost += 0.012 * (1.0 - confidence) * (1.0 - smoothstep(4e-5, 4e-3, signal));
-  float binNoise = (rand2d(vec2(binBase)) - 0.5) * 0.004;
-  rho = clamp(rho + edgeBoost + binNoise, 0.0, 1.05);
+  float rho = mix(min(1.0, rhoCore + 0.018), rhoCore, confidence);
+
+  // Keep only a very small global lift. The visible clean-air ring is added
+  // later in the display shader so the storm interior does not brighten.
+  float baselineLift = mix(0.0075, 0.0030, smoothstep(0.05, 0.45, irregularityMean));
+  rho = min(rho + baselineLift, 1.015);
+
+  float binNoise = (rand2d(vec2(binBase)) - 0.5) * 0.0065;
+  float fineNoise = (rand2d(vec2(binBase) * 0.37 + vec2(19.0, 73.0)) - 0.5) * 0.0030;
+  rho = clamp(rho + binNoise + fineNoise, 0.0, 1.05);
 
   float valid = step(2e-6, signal);
-  fragmentColor = vec4(rho, rhoRaw, irregularityMean, valid);
+  fragmentColor = vec4(rho, rhoPrecip, irregularityMean, valid);
 }
