@@ -227,7 +227,8 @@ vec4 getAirColor(vec2 fragCoordIn)
 
   float cloudDensity = max(cloudwater * 13.6, 0.0);
 
-  float totalDensity = cloudDensity + water[PRECIPITATION] * 0.8; // visualize precipitation
+  // Suppress “bloby” precipitation contribution in realistic view
+  float precipDensity = min(water[PRECIPITATION] * 0.2, 0.5); // much weaker visual weight
 
 
   // float cloudOpacity = clamp(cloudwater * 4.0, 0.0, 1.0);
