@@ -226,14 +226,27 @@ vec4 getAirColor(vec2 fragCoordIn)
   vec3 cloudCol = vec3(1.0 / (cloudwater * 0.005 + 1.0)); // 0.10 white to black
 
   float cloudDensity = max(cloudwater * 13.6, 0.0);
+  float precipAmount = max(water[PRECIPITATION], 0.0);
+
+  float precipVisual = smoothstep(0.0, 1.9, precipAmount);
+  float heavyPrecipMask = smoothstep(1.20, 4.20, precipAmount);
+  float corePrecipMask = smoothstep(3.40, 6.80, precipAmount);
+  float precipDominance = clamp(precipAmount / (precipAmount + cloudwater * 0.35 + 0.08), 0.0, 1.0);
+  float precipDarkening = clamp((0.22 * heavyPrecipMask + 0.42 * heavyPrecipMask * heavyPrecipMask + 0.18 * corePrecipMask) * precipDominance, 0.0, 0.78);
+  float precipDensity = min(pow(precipAmount, 0.92) * 0.42, 1.05);
+  vec3 precipBaseCol = mix(vec3(0.84, 0.87, 0.91), vec3(0.68, 0.72, 0.78), precipVisual);
+  vec3 precipCoreCol = mix(vec3(0.44, 0.48, 0.54), vec3(0.26, 0.29, 0.34), corePrecipMask);
+  vec3 precipCol = mix(precipBaseCol, precipCoreCol, precipDarkening);
 
   // Suppress “bloby” precipitation contribution in realistic view
-  float precipDensity = min(water[PRECIPITATION] * 0.2, 0.5); // much weaker visual weight
-
   float totalDensity = cloudDensity + precipDensity; // visualize precipitation softly
+  float precipMix = clamp((precipDensity / max(totalDensity, 1e-6)) * 1.18, 0.0, 0.92);
+  vec3 hydroCol = mix(cloudCol, precipCol, precipMix);
 
   // float cloudOpacity = clamp(cloudwater * 4.0, 0.0, 1.0);
-  float cloudOpacity = clamp(1.0 - (1.0 / (1. + totalDensity)), 0.0, 0.7);
+  float cloudOpacity = clamp(1.0 - (1.0 / (1. + cloudDensity)), 0.0, 0.7);
+  float precipOpacity = clamp(1.0 - (1.0 / (1. + precipDensity * 1.55)), 0.0, 0.68);
+  float hydroOpacity = 1.0 - (1.0 - cloudOpacity) * (1.0 - precipOpacity);
 
   const vec3 smokeThinCol = vec3(0.8, 0.51, 0.26);
   const vec3 smokeThickCol = vec3(0., 0., 0.);
@@ -248,8 +261,8 @@ vec4 getAirColor(vec2 fragCoordIn)
 
   shadowLight += fireIntensity * 2.5;                                                                                 // 1.5
 
-  float opacity = 1. - (1. - smokeOpacity) * (1. - cloudOpacity);                                                     // alpha blending
-  vec3 color = (smokeOrFireCol * smokeOpacity / opacity) + (cloudCol * cloudOpacity * (1. - smokeOpacity) / opacity); // color blending
+  float opacity = 1. - (1. - smokeOpacity) * (1. - hydroOpacity);                                                     // alpha blending
+  vec3 color = (smokeOrFireCol * smokeOpacity / opacity) + (hydroCol * hydroOpacity * (1. - smokeOpacity) / opacity); // color blending
 
 
   vec4 lightningData = texture(lightningDataTex, vec2(0.5));
