@@ -3,7 +3,7 @@ precision highp float;
 
 in vec4 data_out; // liquid, ice, density, size
 in float compactness_out;
-layout(location = 0) out vec4 phaseOut0; // R liquid sum, G ice sum, B compactness sum, A irregularity sum
+layout(location = 0) out vec4 phaseOut0; // R liquid sum, G ice sum, B compactness sum, A hail shaft sum
 layout(location = 1) out vec4 phaseOut1; // R rho_i sum, G rho_i^2 sum, B compactness sum, A irregularity sum
 layout(location = 2) out vec4 radarOut;  // R Zh, G Zv, B HV, A count
 
@@ -110,8 +110,11 @@ void main()
 
   float hv = particleRho * sqrt(max(zh * zv, 0.0));
   float irregularity = graupelness * 0.45 + hailness * 0.70 + wetHailness * 1.00 + meltingness * 0.85;
+  float hailShaft = (hailness + wetHailness * 0.80) * total *
+                    smoothstep(0.50, 1.15, size) *
+                    smoothstep(0.76, 1.00, density);
 
-  phaseOut0 = vec4(liquid, ice, compactness, irregularity);
+  phaseOut0 = vec4(liquid, ice, compactness, hailShaft);
   phaseOut1 = vec4(particleRho, particleRho * particleRho, compactness, irregularity);
   radarOut = vec4(zh, zv, hv, 1.0);
 }
