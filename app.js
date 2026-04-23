@@ -6104,13 +6104,15 @@ var soundingGraph = {
   const waterTexture_0 = gl.createTexture();
   const waterTexture_1 = gl.createTexture();
   const reflectivitySnapshotTex = gl.createTexture();
-  const phaseTexture = gl.createTexture();           // liquid/ice sums
+  const phaseTexture = gl.createTexture();           // liquid/ice sums and hail shaft mask
   const phaseStatsTexture = gl.createTexture();      // rho_i / irregularity stats for rhohv
   const radarMomentsTexture = gl.createTexture();    // Zh, Zv, HV, count
   const radarMomentsSnapshotTex = gl.createTexture();
   const rhohvSnapshotTex = gl.createTexture();
   const radarFieldTexture_0 = gl.createTexture();    // smoothed radar field
   const radarFieldTexture_1 = gl.createTexture();    // smoothed radar field
+  const hailShaftTexture_0 = gl.createTexture();      // smoothed hail signal for realistic precipitation tint
+  const hailShaftTexture_1 = gl.createTexture();      // smoothed hail signal for realistic precipitation tint
   const phaseSnapshotTex = gl.createTexture();
   const phaseStatsSnapshotTex = gl.createTexture();
   const wallTexture_0 = gl.createTexture();
@@ -6151,14 +6153,18 @@ var soundingGraph = {
   const phaseSnapshotFBO = gl.createFramebuffer();
   const radarFieldFrameBuff_0 = gl.createFramebuffer();
   const radarFieldFrameBuff_1 = gl.createFramebuffer();
+  const hailShaftFrameBuff_0 = gl.createFramebuffer();
+  const hailShaftFrameBuff_1 = gl.createFramebuffer();
   const precipitationFeedbackFrameBuff = gl.createFramebuffer();
   const lightningDataFrameBuff = gl.createFramebuffer();
   let radarFieldCurrentIndex = 0;
+  let hailShaftCurrentIndex = 0;
 
   // Set up Textures
   async function setupTextures()
   {
     radarFieldCurrentIndex = 0;
+    hailShaftCurrentIndex = 0;
 
     gl.bindTexture(gl.TEXTURE_2D, baseTexture_0);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, initialBaseTex);
@@ -6244,6 +6250,16 @@ var soundingGraph = {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 
+    gl.bindTexture(gl.TEXTURE_2D, hailShaftTexture_0);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+    gl.bindTexture(gl.TEXTURE_2D, hailShaftTexture_1);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
     gl.bindTexture(gl.TEXTURE_2D, phaseSnapshotTex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
@@ -6323,6 +6339,9 @@ var soundingGraph = {
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, phaseTexture, 0);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, phaseStatsTexture, 0);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT2, gl.TEXTURE_2D, radarMomentsTexture, 0);
+  gl.drawBuffers([ gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2 ]);
+  gl.clearColor(0.0, 0.0, 0.0, 0.0);
+  gl.clear(gl.COLOR_BUFFER_BIT);
 
   gl.bindFramebuffer(gl.FRAMEBUFFER, radarFieldFrameBuff_0);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, radarFieldTexture_0, 0);
@@ -6330,14 +6349,28 @@ var soundingGraph = {
   gl.bindFramebuffer(gl.FRAMEBUFFER, radarFieldFrameBuff_1);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, radarFieldTexture_1, 0);
 
+  gl.bindFramebuffer(gl.FRAMEBUFFER, hailShaftFrameBuff_0);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, hailShaftTexture_0, 0);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, hailShaftFrameBuff_1);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, hailShaftTexture_1, 0);
+
   gl.bindFramebuffer(gl.FRAMEBUFFER, phaseSnapshotFBO);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, phaseSnapshotTex, 0);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, phaseStatsSnapshotTex, 0);
 
   gl.bindFramebuffer(gl.FRAMEBUFFER, radarFieldFrameBuff_0);
+  gl.drawBuffers([ gl.COLOR_ATTACHMENT0 ]);
   gl.clearColor(0.0, 0.0, 0.0, 0.0);
   gl.clear(gl.COLOR_BUFFER_BIT);
   gl.bindFramebuffer(gl.FRAMEBUFFER, radarFieldFrameBuff_1);
+  gl.drawBuffers([ gl.COLOR_ATTACHMENT0 ]);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, hailShaftFrameBuff_0);
+  gl.drawBuffers([ gl.COLOR_ATTACHMENT0 ]);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, hailShaftFrameBuff_1);
+  gl.drawBuffers([ gl.COLOR_ATTACHMENT0 ]);
   gl.clear(gl.COLOR_BUFFER_BIT);
 
   // initialize snapshot immediately so first render has valid data
@@ -6731,6 +6764,7 @@ var soundingGraph = {
   gl.uniform1i(gl.getUniformLocation(realisticDisplayProgram, 'lightningTex'), 7);
   gl.uniform1i(gl.getUniformLocation(realisticDisplayProgram, 'lightningDataTex'), 8);
   gl.uniform1i(gl.getUniformLocation(realisticDisplayProgram, 'ambientLightTex'), 9);
+  gl.uniform1i(gl.getUniformLocation(realisticDisplayProgram, 'hailShaftTex'), 10);
   gl.uniform1f(gl.getUniformLocation(realisticDisplayProgram, 'dryLapse'), dryLapse);
   gl.uniform1f(gl.getUniformLocation(realisticDisplayProgram, 'cellHeight'), cellHeight);
 
@@ -7163,6 +7197,16 @@ var soundingGraph = {
             gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
             radarFieldCurrentIndex = 1 - radarFieldCurrentIndex;
 
+            gl.activeTexture(gl.TEXTURE2);
+            gl.bindTexture(gl.TEXTURE_2D, hailShaftCurrentIndex == 0 ? hailShaftTexture_0 : hailShaftTexture_1);
+            gl.activeTexture(gl.TEXTURE3);
+            gl.bindTexture(gl.TEXTURE_2D, phaseTexture);
+
+            gl.bindFramebuffer(gl.FRAMEBUFFER, hailShaftCurrentIndex == 0 ? hailShaftFrameBuff_1 : hailShaftFrameBuff_0);
+            gl.drawBuffers([ gl.COLOR_ATTACHMENT0 ]);
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+            hailShaftCurrentIndex = 1 - hailShaftCurrentIndex;
+
             if (displayWeatherStations && iterNum % 208 == 0) { // ~every 60 in game seconds:  0.00008 *3600 * 208 = 59.9
               for (i = 0; i < weatherStations.length; i++) {
                 weatherStations[i].measure();
@@ -7443,6 +7487,8 @@ var soundingGraph = {
 
       gl.activeTexture(gl.TEXTURE9);
       gl.bindTexture(gl.TEXTURE_2D, ambientLightFBOs[0].texture);
+      gl.activeTexture(gl.TEXTURE10);
+      gl.bindTexture(gl.TEXTURE_2D, hailShaftCurrentIndex == 0 ? hailShaftTexture_0 : hailShaftTexture_1);
 
 
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); // draw to hdr framebuffer

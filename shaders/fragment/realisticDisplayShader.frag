@@ -22,6 +22,7 @@ uniform sampler2D surfaceTextureMap;
 uniform sampler2D curlTex;
 uniform sampler2D lightningTex;
 uniform sampler2D lightningDataTex;
+uniform sampler2D hailShaftTex;
 
 uniform sampler2D ambientLightTex;
 
@@ -202,6 +203,34 @@ vec3 spectral_zucconi(float w)
   return bump3y(cs * (x - xs), ys);
 }
 
+float sampleHailShaftRaw(vec2 fragCoordIn)
+{
+  return max(bilerpWallVis(hailShaftTex, wallTex, fragCoordIn).a, 0.0);
+}
+
+float sampleHailShaftField(vec2 fragCoordIn)
+{
+  float raw = sampleHailShaftRaw(fragCoordIn) * 0.22;
+  raw += (sampleHailShaftRaw(fragCoordIn + vec2(3.0, 0.0)) +
+          sampleHailShaftRaw(fragCoordIn + vec2(-3.0, 0.0)) +
+          sampleHailShaftRaw(fragCoordIn + vec2(0.0, 3.0)) +
+          sampleHailShaftRaw(fragCoordIn + vec2(0.0, -3.0))) *
+         0.10;
+  raw += (sampleHailShaftRaw(fragCoordIn + vec2(8.0, 0.0)) +
+          sampleHailShaftRaw(fragCoordIn + vec2(-8.0, 0.0)) +
+          sampleHailShaftRaw(fragCoordIn + vec2(0.0, 8.0)) +
+          sampleHailShaftRaw(fragCoordIn + vec2(0.0, -8.0))) *
+         0.055;
+  raw += (sampleHailShaftRaw(fragCoordIn + vec2(6.0, 6.0)) +
+          sampleHailShaftRaw(fragCoordIn + vec2(-6.0, 6.0)) +
+          sampleHailShaftRaw(fragCoordIn + vec2(6.0, -6.0)) +
+          sampleHailShaftRaw(fragCoordIn + vec2(-6.0, -6.0))) *
+         0.045;
+
+  float field = smoothstep(0.004, 0.240, raw);
+  return field * field * (3.0 - 2.0 * field);
+}
+
 
 vec4 getAirColor(vec2 fragCoordIn)
 {
@@ -234,9 +263,12 @@ vec4 getAirColor(vec2 fragCoordIn)
   float precipDominance = clamp(precipAmount / (precipAmount + cloudwater * 0.35 + 0.08), 0.0, 1.0);
   float precipDarkening = clamp((0.22 * heavyPrecipMask + 0.42 * heavyPrecipMask * heavyPrecipMask + 0.18 * corePrecipMask) * precipDominance, 0.0, 0.78);
   float precipDensity = min(pow(precipAmount, 0.92) * 0.42, 1.05);
+  float hailShaftMask = sampleHailShaftField(bndFragCoord) * heavyPrecipMask * precipDominance;
   vec3 precipBaseCol = mix(vec3(0.84, 0.87, 0.91), vec3(0.68, 0.72, 0.78), precipVisual);
   vec3 precipCoreCol = mix(vec3(0.44, 0.48, 0.54), vec3(0.26, 0.29, 0.34), corePrecipMask);
   vec3 precipCol = mix(precipBaseCol, precipCoreCol, precipDarkening);
+  vec3 hailShaftCol = mix(vec3(0.34, 0.88, 0.86), vec3(0.13, 0.58, 0.66), corePrecipMask);
+  precipCol = mix(precipCol, hailShaftCol, hailShaftMask * 0.42);
 
   // Suppress “bloby” precipitation contribution in realistic view
   float totalDensity = cloudDensity + precipDensity; // visualize precipitation softly
