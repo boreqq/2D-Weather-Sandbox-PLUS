@@ -348,6 +348,62 @@ const valsPerDroplet = 7;
 const previousValsPerDroplet = 6;
 const legacyValsPerDroplet = 5;
 
+const RADAR_PRODUCT_REFLECTIVITY = 'RADAR_REFLECTIVITY';
+const RADAR_PRODUCT_RHOHV = 'RADAR_RHOHV';
+const RADAR_PRODUCT_ZDR = 'RADAR_ZDR';
+const RADAR_PRODUCT_KDP = 'RADAR_KDP';
+const RADAR_PRODUCT_RADIAL_VELOCITY = 'RADAR_RADIAL_VELOCITY';
+
+const RADAR_PRODUCTS = Object.freeze([
+  {
+    id : RADAR_PRODUCT_REFLECTIVITY,
+    label : 'reflectivity',
+    launcherLabel : 'reflectivity',
+    shortDescription : 'Base reflectivity (dBZ)',
+    isImplemented : true,
+    displayMode : 'DISP_REFLECTIVITY',
+  },
+  {
+    id : RADAR_PRODUCT_RHOHV,
+    label : 'rhohv',
+    launcherLabel : 'rhohv',
+    shortDescription : 'Dual-pol rhohv / correlation coefficient',
+    isImplemented : true,
+    displayMode : 'DISP_RHOHV',
+  },
+  {
+    id : RADAR_PRODUCT_ZDR,
+    label : 'zdr',
+    launcherLabel : 'zdr',
+    shortDescription : 'Differential reflectivity',
+    isImplemented : false,
+    displayMode : null,
+  },
+  {
+    id : RADAR_PRODUCT_KDP,
+    label : 'kdp',
+    launcherLabel : 'kdp',
+    shortDescription : 'Specific differential phase',
+    isImplemented : false,
+    displayMode : null,
+  },
+  {
+    id : RADAR_PRODUCT_RADIAL_VELOCITY,
+    label : 'radial velocity',
+    launcherLabel : 'radial velocity',
+    shortDescription : 'Velocity product placeholder',
+    isImplemented : false,
+    displayMode : null,
+  },
+]);
+
+const RADAR_PRODUCTS_BY_ID = Object.freeze(
+  RADAR_PRODUCTS.reduce((acc, product) => {
+    acc[product.id] = product;
+    return acc;
+  }, {})
+);
+
 const guiControls_default = {
   vorticity : 0.005,
   dragMultiplier : 0.001, // 0.01
@@ -413,7 +469,9 @@ const guiControls_default = {
   rhohvLowCCArtifacts : true,
   rhohvClutterDensity : 1.0,
   reflectivityRefreshSec : 2.0,
-  radarProduct : 'RADAR_REFLECTIVITY', // legacy save compatibility only
+  radarProduct : RADAR_PRODUCT_REFLECTIVITY, // legacy save compatibility only
+  selectedRadarProduct : RADAR_PRODUCT_REFLECTIVITY,
+  lastLiveRadarProduct : RADAR_PRODUCT_REFLECTIVITY,
   realDewPoint : false, // show real dew point in graph, instead of dew point with cloud water included
   enablePrecipitation : true,
   showDrops : false,
@@ -428,6 +486,30 @@ const guiControls_default = {
   tempUnit : 'TEMP_UNIT_C',
   windUnit : 'SPEED_UNIT_KMH',
 };
+
+function getRadarProductMeta(productId)
+{
+  return RADAR_PRODUCTS_BY_ID[productId] || RADAR_PRODUCTS_BY_ID[RADAR_PRODUCT_REFLECTIVITY];
+}
+
+function isImplementedRadarProduct(productId)
+{
+  return !!getRadarProductMeta(productId).isImplemented;
+}
+
+function getDisplayModeForRadarProduct(productId)
+{
+  return getRadarProductMeta(productId).displayMode;
+}
+
+function getRadarProductIdForDisplayMode(displayMode)
+{
+  if (displayMode == 'DISP_REFLECTIVITY')
+    return RADAR_PRODUCT_REFLECTIVITY;
+  if (displayMode == 'DISP_RHOHV')
+    return RADAR_PRODUCT_RHOHV;
+  return null;
+}
 
 var horizontalDisplayMult = 3.0; // 3.0 to cover srceen while zoomed out
 
@@ -4015,10 +4097,36 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     gl.uniform1f(gl.getUniformLocation(postProcessingProgram, 'exposure'), guiControls.exposure);
   }
 
+  var radarDisplayModeController;
+
+  function syncLegacyRadarProductField()
+  {
+    guiControls.radarProduct = isImplementedRadarProduct(guiControls.lastLiveRadarProduct) ? guiControls.lastLiveRadarProduct : RADAR_PRODUCT_REFLECTIVITY;
+  }
+
+  function normalizeRadarGuiState()
+  {
+    const liveProductFromDisplayMode = getRadarProductIdForDisplayMode(guiControls.displayMode);
+
+    if (!RADAR_PRODUCTS_BY_ID[guiControls.selectedRadarProduct])
+      guiControls.selectedRadarProduct = liveProductFromDisplayMode || RADAR_PRODUCT_REFLECTIVITY;
+
+    if (!isImplementedRadarProduct(guiControls.lastLiveRadarProduct))
+      guiControls.lastLiveRadarProduct = isImplementedRadarProduct(guiControls.selectedRadarProduct) ? guiControls.selectedRadarProduct :
+                                         (liveProductFromDisplayMode || RADAR_PRODUCT_REFLECTIVITY);
+
+    if (!isImplementedRadarProduct(guiControls.lastLiveRadarProduct))
+      guiControls.lastLiveRadarProduct = RADAR_PRODUCT_REFLECTIVITY;
+
+    syncLegacyRadarProductField();
+  }
+
   function setupDatGui(strGuiControls)
   {
     datGui = new dat.GUI();
     guiControls = JSON.parse(strGuiControls); // load settings object
+    const hadSavedSelectedRadarProduct = guiControls.selectedRadarProduct !== undefined;
+    const hadSavedLastLiveRadarProduct = guiControls.lastLiveRadarProduct !== undefined;
 
     for (const [key, value] of Object.entries(guiControls_default)) {
       if (guiControls[key] === undefined) {
@@ -4028,10 +4136,11 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     guiControls.tool = 'TOOL_NONE';
 
-    if (guiControls.radarProduct == 'RADAR_RHOHV') {
+    if (!hadSavedSelectedRadarProduct && !hadSavedLastLiveRadarProduct && guiControls.radarProduct == RADAR_PRODUCT_RHOHV) {
       guiControls.displayMode = 'DISP_RHOHV';
-      guiControls.radarProduct = 'RADAR_REFLECTIVITY';
     }
+
+    normalizeRadarGuiState();
 
     cam.wrapHorizontally = guiControls.wrapHorizontally;
     cam.smooth = guiControls.SmoothCam;
@@ -4057,6 +4166,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         setGuiUniforms();
         hideOrShowGraph();
         updateSunlight();
+        handleRadarUiExternalChange();
       }
     };
 
@@ -4347,7 +4457,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     var display_folder = datGui.addFolder('Display');
 
-    display_folder
+    radarDisplayModeController = display_folder
       .add(guiControls, 'displayMode', {
         '1 Temperature -26°C to 30°C' : 'DISP_TEMPERATURE',
         '2 Water Vapor' : 'DISP_WATER',
@@ -4370,6 +4480,14 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         'Correlation Coefficient (ρhv)' : 'DISP_RHOHV'
       })
       .name('Display Mode')
+      .onChange(function() {
+        const radarProductId = getRadarProductIdForDisplayMode(guiControls.displayMode);
+        if (radarProductId) {
+          activateRadarProduct(radarProductId);
+        } else {
+          handleRadarUiExternalChange();
+        }
+      })
       .listen();
     display_folder.add(guiControls, 'exposure', 0.5, 5.0, 0.01)
       .onChange(function() {
@@ -4483,28 +4601,33 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     // Radar-specific controls
     var radar_folder = datGui.addFolder('Radar');
     radar_folder.add(guiControls, 'reflectivityRefreshSec', 0.0, 10.0, 0.01)
+      .onChange(function() {
+        handleRadarUiExternalChange();
+      })
       .name('Radar refresh (s)')
       .listen();
 
     var reflectivity_folder = datGui.addFolder('Reflectivity');
-    reflectivity_folder.add(guiControls, 'reflectivityBackground').name('Reflectivity Background').listen();
-    reflectivity_folder.add(guiControls, 'debugReflectivity').name('Debug dBZ at Cursor').listen();
+    reflectivity_folder.add(guiControls, 'reflectivityBackground').onChange(handleRadarUiExternalChange).name('Reflectivity Background').listen();
+    reflectivity_folder.add(guiControls, 'debugReflectivity').onChange(handleRadarUiExternalChange).name('Debug dBZ at Cursor').listen();
     reflectivity_folder.add(guiControls, 'reflectivityPixelSize', 1, 32, 1)
       .name('Reflectivity Pixel Size')
       .onChange(function() {
         lastReflectivitySnapshotTime = -Infinity;
+        handleRadarUiExternalChange();
       })
       .listen();
 
     var rhohv_folder = datGui.addFolder('Correlation Coefficient');
-    rhohv_folder.add(guiControls, 'rhohvLowCCArtifacts').name('Low CC Artifacts').listen();
-    rhohv_folder.add(guiControls, 'rhohvClutterDensity', 0.0, 3.0, 0.01).name('Clutter Density').listen();
-    rhohv_folder.add(guiControls, 'rhohvBackground').name('ρhv Background').listen();
-    rhohv_folder.add(guiControls, 'debugRhohv').name('Debug ρhv at Cursor').listen();
+    rhohv_folder.add(guiControls, 'rhohvLowCCArtifacts').onChange(handleRadarUiExternalChange).name('Low CC Artifacts').listen();
+    rhohv_folder.add(guiControls, 'rhohvClutterDensity', 0.0, 3.0, 0.01).onChange(handleRadarUiExternalChange).name('Clutter Density').listen();
+    rhohv_folder.add(guiControls, 'rhohvBackground').onChange(handleRadarUiExternalChange).name('ρhv Background').listen();
+    rhohv_folder.add(guiControls, 'debugRhohv').onChange(handleRadarUiExternalChange).name('Debug ρhv at Cursor').listen();
     rhohv_folder.add(guiControls, 'rhohvPixelSize', 1, 32, 1)
       .name('ρhv Pixel Size')
       .onChange(function() {
         lastReflectivitySnapshotTime = -Infinity;
+        handleRadarUiExternalChange();
       })
       .listen();
 
@@ -4526,6 +4649,455 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     return isRhohvMode(displayMode) ? guiControls.debugRhohv : guiControls.debugReflectivity;
   }
 
+  var radarDrawerRootEl = null;
+  var radarDrawerLauncherEl = null;
+  var radarDrawerLauncherArrowEl = null;
+  var radarDrawerLauncherLabelEl = null;
+  var radarDrawerPanelEl = null;
+  var radarProductListEl = null;
+  var radarSettingsSheetEl = null;
+  var radarSettingsToggleEl = null;
+  var radarSettingsArrowEl = null;
+  var radarSettingsPeekTitleEl = null;
+  var radarSettingsTitleEl = null;
+  var radarSettingsMetaEl = null;
+  var radarSettingsContentEl = null;
+  var radarDrawerOpen = false;
+  var radarSettingsOpen = false;
+
+  function formatRadarUiNumber(value, digits = 2)
+  {
+    return Number(value).toFixed(digits).replace(/\.?0+$/, '');
+  }
+
+  function updateRadarPanelShell()
+  {
+    if (!radarDrawerRootEl)
+      return;
+
+    const selectedRadarProduct = getRadarProductMeta(guiControls.selectedRadarProduct);
+    radarDrawerRootEl.classList.toggle('is-open', radarDrawerOpen);
+    radarDrawerRootEl.classList.toggle('has-settings-open', radarSettingsOpen);
+    radarDrawerLauncherEl.setAttribute('aria-expanded', radarDrawerOpen ? 'true' : 'false');
+    radarDrawerPanelEl.setAttribute('aria-hidden', radarDrawerOpen ? 'false' : 'true');
+    if (radarDrawerLauncherArrowEl)
+      radarDrawerLauncherArrowEl.textContent = radarDrawerOpen ? '▴' : '▾';
+    if (radarDrawerLauncherLabelEl)
+      radarDrawerLauncherLabelEl.textContent = 'Radar / ' + selectedRadarProduct.launcherLabel;
+    if (radarSettingsToggleEl)
+      radarSettingsToggleEl.setAttribute('aria-expanded', radarSettingsOpen ? 'true' : 'false');
+    if (radarSettingsArrowEl)
+      radarSettingsArrowEl.textContent = radarSettingsOpen ? '▾' : '▴';
+    if (radarSettingsPeekTitleEl)
+      radarSettingsPeekTitleEl.textContent = selectedRadarProduct.label;
+  }
+
+  function handleRadarUiExternalChange()
+  {
+    syncLegacyRadarProductField();
+    updateRadarPanelShell();
+    if (radarDrawerOpen) {
+      renderRadarProductList();
+      renderRadarSettings();
+    }
+    if (radarDisplayModeController)
+      radarDisplayModeController.updateDisplay();
+  }
+
+  function appendRadarToggleControl(parent, label, description, checked, onChange)
+  {
+    const wrapper = document.createElement('label');
+    wrapper.className = 'radar-control radar-control--toggle';
+
+    const copy = document.createElement('div');
+    copy.className = 'radar-control__copy';
+
+    const title = document.createElement('span');
+    title.className = 'radar-control__label';
+    title.textContent = label;
+    copy.appendChild(title);
+
+    if (description) {
+      const descriptionEl = document.createElement('span');
+      descriptionEl.className = 'radar-control__description';
+      descriptionEl.textContent = description;
+      copy.appendChild(descriptionEl);
+    }
+
+    const input = document.createElement('input');
+    input.className = 'radar-control__checkbox';
+    input.type = 'checkbox';
+    input.checked = checked;
+    input.addEventListener('change', function(event) {
+      onChange(event.target.checked);
+    });
+
+    wrapper.appendChild(copy);
+    wrapper.appendChild(input);
+    parent.appendChild(wrapper);
+  }
+
+  function appendRadarRangeControl(parent, config)
+  {
+    const wrapper = document.createElement('label');
+    wrapper.className = 'radar-control radar-control--range';
+
+    const topRow = document.createElement('div');
+    topRow.className = 'radar-control__toprow';
+
+    const labelEl = document.createElement('span');
+    labelEl.className = 'radar-control__label';
+    labelEl.textContent = config.label;
+    topRow.appendChild(labelEl);
+
+    const valueEl = document.createElement('span');
+    valueEl.className = 'radar-control__value';
+    valueEl.textContent = config.formatValue(config.getValue());
+    topRow.appendChild(valueEl);
+
+    wrapper.appendChild(topRow);
+
+    if (config.description) {
+      const descriptionEl = document.createElement('span');
+      descriptionEl.className = 'radar-control__description';
+      descriptionEl.textContent = config.description;
+      wrapper.appendChild(descriptionEl);
+    }
+
+    const input = document.createElement('input');
+    input.className = 'radar-control__slider';
+    input.type = 'range';
+    input.min = config.min;
+    input.max = config.max;
+    input.step = config.step;
+    input.value = config.getValue();
+    input.addEventListener('input', function(event) {
+      const nextValue = Number(event.target.value);
+      config.onInput(nextValue);
+      valueEl.textContent = config.formatValue(nextValue);
+    });
+    wrapper.appendChild(input);
+    parent.appendChild(wrapper);
+  }
+
+  function renderRadarProductList()
+  {
+    if (!radarProductListEl)
+      return;
+
+    radarProductListEl.replaceChildren();
+
+    for (const product of RADAR_PRODUCTS) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'radar-product-card';
+
+      if (guiControls.selectedRadarProduct == product.id)
+        button.classList.add('is-selected');
+
+      const currentDisplayProduct = getRadarProductIdForDisplayMode(guiControls.displayMode);
+      if (currentDisplayProduct == product.id)
+        button.classList.add('is-active-view');
+
+      const copy = document.createElement('div');
+      copy.className = 'radar-product-card__copy';
+
+      const label = document.createElement('span');
+      label.className = 'radar-product-card__label';
+      label.textContent = product.label;
+      copy.appendChild(label);
+
+      const description = document.createElement('span');
+      description.className = 'radar-product-card__description';
+      description.textContent = product.shortDescription;
+      copy.appendChild(description);
+
+      button.appendChild(copy);
+
+      if (!product.isImplemented) {
+        const badge = document.createElement('span');
+        badge.className = 'radar-product-card__badge';
+        badge.textContent = 'Soon';
+        button.appendChild(badge);
+      }
+
+      button.addEventListener('click', function() {
+        setSelectedRadarProduct(product.id, {activateIfImplemented : true});
+      });
+
+      radarProductListEl.appendChild(button);
+    }
+  }
+
+  function renderRadarSettings()
+  {
+    if (!radarSettingsContentEl)
+      return;
+
+    const product = getRadarProductMeta(guiControls.selectedRadarProduct);
+    radarSettingsTitleEl.textContent = product.label;
+    radarSettingsMetaEl.textContent = product.shortDescription;
+    radarSettingsContentEl.replaceChildren();
+
+    if (!product.isImplemented) {
+      const stateEl = document.createElement('div');
+      stateEl.className = 'radar-empty-state';
+
+      const badge = document.createElement('span');
+      badge.className = 'radar-empty-state__badge';
+      badge.textContent = 'Wkrotce';
+      stateEl.appendChild(badge);
+
+      const title = document.createElement('div');
+      title.className = 'radar-empty-state__title';
+      title.textContent = 'Produkt niedostepny w tej wersji';
+      stateEl.appendChild(title);
+
+      const message = document.createElement('div');
+      message.className = 'radar-empty-state__text';
+      message.textContent = 'Ten produkt jest zaplanowany, ale nie jest jeszcze renderowany w tej wersji.';
+      stateEl.appendChild(message);
+
+      const fallbackProduct = getRadarProductMeta(guiControls.lastLiveRadarProduct);
+      const shortcutHint = document.createElement('div');
+      shortcutHint.className = 'radar-empty-state__hint';
+      shortcutHint.textContent = 'Klawisz 0 wlaczy: ' + fallbackProduct.label;
+      stateEl.appendChild(shortcutHint);
+
+      radarSettingsContentEl.appendChild(stateEl);
+      return;
+    }
+
+    if (product.id == RADAR_PRODUCT_REFLECTIVITY) {
+      appendRadarToggleControl(
+        radarSettingsContentEl,
+        'Background',
+        'Blend over terrain or render as a full radar view.',
+        guiControls.reflectivityBackground,
+        function(checked) { guiControls.reflectivityBackground = checked; }
+      );
+      appendRadarToggleControl(
+        radarSettingsContentEl,
+        'Debug At Cursor',
+        'Show sampled dBZ under the mouse cursor.',
+        guiControls.debugReflectivity,
+        function(checked) { guiControls.debugReflectivity = checked; }
+      );
+      appendRadarRangeControl(radarSettingsContentEl, {
+        label : 'Pixel Size',
+        description : 'Controls the blocky radar bin look.',
+        min : 1,
+        max : 32,
+        step : 1,
+        getValue : function() { return guiControls.reflectivityPixelSize; },
+        formatValue : function(value) { return Math.round(value).toString(); },
+        onInput : function(value) {
+          guiControls.reflectivityPixelSize = Math.round(value);
+          lastReflectivitySnapshotTime = -Infinity;
+        },
+      });
+      appendRadarRangeControl(radarSettingsContentEl, {
+        label : 'Radar Refresh (s)',
+        description : 'Shared refresh cadence for radar snapshots.',
+        min : 0,
+        max : 10,
+        step : 0.01,
+        getValue : function() { return guiControls.reflectivityRefreshSec; },
+        formatValue : function(value) { return formatRadarUiNumber(value, 2); },
+        onInput : function(value) { guiControls.reflectivityRefreshSec = value; },
+      });
+      return;
+    }
+
+    appendRadarToggleControl(
+      radarSettingsContentEl,
+      'Background',
+      'Blend over terrain or render as a full radar view.',
+      guiControls.rhohvBackground,
+      function(checked) { guiControls.rhohvBackground = checked; }
+    );
+    appendRadarToggleControl(
+      radarSettingsContentEl,
+      'Debug At Cursor',
+      'Show sampled rhohv under the mouse cursor.',
+      guiControls.debugRhohv,
+      function(checked) { guiControls.debugRhohv = checked; }
+    );
+    appendRadarRangeControl(radarSettingsContentEl, {
+      label : 'Pixel Size',
+      description : 'Controls the apparent bin size for rhohv.',
+      min : 1,
+      max : 32,
+      step : 1,
+      getValue : function() { return guiControls.rhohvPixelSize; },
+      formatValue : function(value) { return Math.round(value).toString(); },
+      onInput : function(value) {
+        guiControls.rhohvPixelSize = Math.round(value);
+        lastReflectivitySnapshotTime = -Infinity;
+      },
+    });
+    appendRadarToggleControl(
+      radarSettingsContentEl,
+      'Low CC Artifacts',
+      'Keep the current noisy low-correlation styling.',
+      guiControls.rhohvLowCCArtifacts,
+      function(checked) { guiControls.rhohvLowCCArtifacts = checked; }
+    );
+    appendRadarRangeControl(radarSettingsContentEl, {
+      label : 'Clutter Density',
+      description : 'Adds more or less texture to low-CC regions.',
+      min : 0,
+      max : 3,
+      step : 0.01,
+      getValue : function() { return guiControls.rhohvClutterDensity; },
+      formatValue : function(value) { return formatRadarUiNumber(value, 2); },
+      onInput : function(value) { guiControls.rhohvClutterDensity = value; },
+    });
+    appendRadarRangeControl(radarSettingsContentEl, {
+      label : 'Radar Refresh (s)',
+      description : 'Shared refresh cadence for radar snapshots.',
+      min : 0,
+      max : 10,
+      step : 0.01,
+      getValue : function() { return guiControls.reflectivityRefreshSec; },
+      formatValue : function(value) { return formatRadarUiNumber(value, 2); },
+      onInput : function(value) { guiControls.reflectivityRefreshSec = value; },
+    });
+  }
+
+  function ensureRadarPanel()
+  {
+    if (radarDrawerRootEl)
+      return;
+
+    const container = document.createElement('div');
+    container.innerHTML = `
+      <div id="radarDrawer" class="radar-drawer">
+        <button id="radarDrawerLauncher" class="radar-drawer__launcher" type="button" aria-label="Toggle radar panel" aria-controls="radarDrawerPanel" aria-expanded="false">
+          <span class="radar-drawer__launcher-icon" aria-hidden="true">
+            <span id="radarDrawerLauncherArrow" class="radar-drawer__launcher-arrow">▾</span>
+          </span>
+          <span id="radarDrawerLauncherLabel" class="radar-drawer__launcher-label">Radar / REF</span>
+        </button>
+        <section id="radarDrawerPanel" class="radar-drawer__panel" aria-hidden="true">
+          <div class="radar-drawer__header">
+            <div>
+              <div class="radar-drawer__eyebrow">Radar</div>
+              <h3 class="radar-drawer__title">Products</h3>
+            </div>
+            <div class="radar-drawer__hint">0 = selected view</div>
+          </div>
+          <div id="radarProductList" class="radar-product-list"></div>
+          <div id="radarSettingsSheet" class="radar-settings-sheet">
+            <button id="radarSettingsToggle" class="radar-settings-sheet__tab" type="button" aria-expanded="false" aria-controls="radarSettingsBody">
+              <div class="radar-settings-sheet__copy">
+                <div class="radar-settings-sheet__eyebrow">Settings</div>
+                <div id="radarSettingsPeekTitle" class="radar-settings-sheet__title">Reflectivity</div>
+              </div>
+              <span id="radarSettingsArrow" class="radar-settings-sheet__arrow" aria-hidden="true">▴</span>
+            </button>
+            <div id="radarSettingsBody" class="radar-settings-sheet__body">
+              <div class="radar-settings">
+                <div class="radar-settings__eyebrow">Settings</div>
+                <div id="radarSettingsTitle" class="radar-settings__title"></div>
+                <div id="radarSettingsMeta" class="radar-settings__meta"></div>
+                <div id="radarSettingsContent" class="radar-settings__content"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>`;
+
+    radarDrawerRootEl = container.firstElementChild;
+    document.body.appendChild(radarDrawerRootEl);
+
+    radarDrawerLauncherEl = document.getElementById('radarDrawerLauncher');
+    radarDrawerLauncherArrowEl = document.getElementById('radarDrawerLauncherArrow');
+    radarDrawerLauncherLabelEl = document.getElementById('radarDrawerLauncherLabel');
+    radarDrawerPanelEl = document.getElementById('radarDrawerPanel');
+    radarProductListEl = document.getElementById('radarProductList');
+    radarSettingsSheetEl = document.getElementById('radarSettingsSheet');
+    radarSettingsToggleEl = document.getElementById('radarSettingsToggle');
+    radarSettingsArrowEl = document.getElementById('radarSettingsArrow');
+    radarSettingsPeekTitleEl = document.getElementById('radarSettingsPeekTitle');
+    radarSettingsTitleEl = document.getElementById('radarSettingsTitle');
+    radarSettingsMetaEl = document.getElementById('radarSettingsMeta');
+    radarSettingsContentEl = document.getElementById('radarSettingsContent');
+
+    const stopRadarUiPropagation = function(event) { event.stopPropagation(); };
+    radarDrawerRootEl.addEventListener('keydown', stopRadarUiPropagation);
+    radarDrawerRootEl.addEventListener('keyup', stopRadarUiPropagation);
+    radarDrawerRootEl.addEventListener('keypress', stopRadarUiPropagation);
+    radarDrawerRootEl.addEventListener('mousedown', stopRadarUiPropagation);
+    radarDrawerRootEl.addEventListener('wheel', stopRadarUiPropagation);
+
+    radarDrawerLauncherEl.addEventListener('click', function(event) {
+      event.stopPropagation();
+      toggleRadarPanel();
+    });
+
+    radarSettingsToggleEl.addEventListener('click', function(event) {
+      event.stopPropagation();
+      toggleRadarSettings();
+    });
+
+    updateRadarPanelShell();
+  }
+
+  function toggleRadarSettings(open)
+  {
+    ensureRadarPanel();
+    radarSettingsOpen = open === undefined ? !radarSettingsOpen : !!open;
+    updateRadarPanelShell();
+  }
+
+  function toggleRadarPanel(open)
+  {
+    ensureRadarPanel();
+    radarDrawerOpen = open === undefined ? !radarDrawerOpen : !!open;
+    if (!radarDrawerOpen)
+      radarSettingsOpen = false;
+    updateRadarPanelShell();
+
+    if (radarDrawerOpen) {
+      renderRadarProductList();
+      renderRadarSettings();
+    }
+  }
+
+  function activateRadarProduct(productId, options = {})
+  {
+    const product = getRadarProductMeta(productId);
+    if (!product.isImplemented)
+      return false;
+
+    if (!options.preserveSelectedProduct)
+      guiControls.selectedRadarProduct = product.id;
+
+    guiControls.lastLiveRadarProduct = product.id;
+    guiControls.displayMode = product.displayMode;
+    handleRadarUiExternalChange();
+    return true;
+  }
+
+  function setSelectedRadarProduct(productId, options = {})
+  {
+    const product = getRadarProductMeta(productId);
+    guiControls.selectedRadarProduct = product.id;
+
+    if (options.activateIfImplemented && product.isImplemented) {
+      activateRadarProduct(product.id);
+      return;
+    }
+
+    syncLegacyRadarProductField();
+    updateRadarPanelShell();
+    if (radarDrawerOpen) {
+      renderRadarProductList();
+      renderRadarSettings();
+    }
+  }
+
   // guiControls.paused = true; // pause before first iteration for debugging
 
   await loadingBar.set(3, 'Initializing Sounding Graph');
@@ -4540,15 +5112,41 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   {
     SETUP_MODE = false;
     datGui.show(); // unhide
+    ensureRadarPanel();
+    toggleRadarPanel(false);
+    handleRadarUiExternalChange();
 
-    clockEl = document.createElement('div');
-    document.body.appendChild(clockEl);
+    if (!clockEl || !clockEl.isConnected) {
+      clockEl = document.getElementById('simClock');
+      if (!clockEl) {
+        clockEl = document.createElement('div');
+        clockEl.id = 'simClock';
+        document.body.appendChild(clockEl);
+      }
+    }
 
-    clockEl.innerHTML = ''
+    clockEl.innerHTML = '';
     clockEl.style.position = 'absolute';
     clockEl.style.fontFamily = 'Monospace';
     clockEl.style.fontSize = '35px';
     clockEl.style.color = 'white';
+    clockEl.style.pointerEvents = 'none';
+
+    if (!reflectivityDbgEl || !reflectivityDbgEl.isConnected) {
+      reflectivityDbgEl = document.getElementById('reflectivityDebugOverlay');
+      if (!reflectivityDbgEl) {
+        reflectivityDbgEl = document.createElement('div');
+        reflectivityDbgEl.id = 'reflectivityDebugOverlay';
+        document.body.appendChild(reflectivityDbgEl);
+      }
+    }
+
+    reflectivityDbgEl.style.position = 'absolute';
+    reflectivityDbgEl.style.fontFamily = 'Monospace';
+    reflectivityDbgEl.style.fontSize = '16px';
+    reflectivityDbgEl.style.color = '#00ff00';
+    reflectivityDbgEl.style.pointerEvents = 'none';
+    reflectivityDbgEl.style.display = 'none';
 
     simDateTime = new Date(2000, Math.floor(guiControls.month) - 1, (guiControls.month % 1) * 30.417);
 
@@ -5432,9 +6030,10 @@ var soundingGraph = {
     } else if (event.key == 9) {
       guiControls.displayMode = 'DISP_PRECIPFEEDBACK_MASS';
     } else if (event.key == 0) {
-      guiControls.displayMode = 'DISP_REFLECTIVITY';
-    } else if (event.code == 'KeyC') {
-      guiControls.displayMode = 'DISP_RHOHV';
+      const selectedRadarProduct = isImplementedRadarProduct(guiControls.selectedRadarProduct) ? guiControls.selectedRadarProduct : guiControls.lastLiveRadarProduct;
+      activateRadarProduct(selectedRadarProduct, {
+        preserveSelectedProduct : !isImplementedRadarProduct(guiControls.selectedRadarProduct),
+      });
     } else if (event.code == 'KeyK') {
       guiControls.displayMode = 'DISP_AIRQUALITY';
     } else if (event.key == 'ArrowLeft') {
