@@ -72,9 +72,9 @@ void main()
   float wetHailness = secondary.r;
   float meltingness = secondary.g;
 
-  float rainFlatten = clamp((size - 0.45) * 0.35, 0.0, 0.22);
-  float mixedFlatten = clamp((size - 0.50) * 0.18, 0.0, 0.10);
-  float snowFlatten = clamp((size - 0.60) * 0.08, 0.0, 0.04);
+  float rainFlatten = clamp((size - 0.35) * 0.26, 0.0, 0.38);
+  float mixedFlatten = clamp((size - 0.45) * 0.14, 0.0, 0.16);
+  float snowFlatten = clamp((size - 0.55) * 0.05, 0.0, 0.05);
   float flattening = rainFlatten * rainness +
                      mixedFlatten * (meltingness * 0.55 + wetHailness * 0.18) +
                      snowFlatten * (snowness * 0.70 + graupelness * 0.35);
@@ -92,10 +92,28 @@ void main()
 
   float brightBand = meltingness * 0.08 + wetHailness * 0.05;
 
-  float baseMoment = radarPresence * (waterMoment + iceMoment);
-  float zh = baseMoment * (1.0 + brightBand + flattening * 0.04);
-  float zv = radarPresence * (waterMoment * max(1.0 - flattening * 0.55, 0.60) + iceMoment * max(1.0 - flattening * 0.10, 0.90));
-  zv *= (1.0 + brightBand * 0.65);
+  float largeRainTail = smoothstep(1.55, 2.70, size);
+  float giantRainTail = smoothstep(2.05, 3.00, size);
+  float meltingTail = smoothstep(1.45, 2.30, size);
+  float rainZdr = mix(0.12, 2.45, smoothstep(0.45, 1.55, size)) + flattening * 1.10 + largeRainTail * 0.78 + giantRainTail * 3.00;
+  float meltingZdr = mix(0.22, 1.55, smoothstep(0.45, 1.55, size)) + flattening * 0.82 + meltingTail * 0.22;
+  float wetHailZdr = mix(-0.10, 0.70, smoothstep(0.70, 2.00, size)) + flattening * 0.35;
+  float snowZdr = mix(0.02, 0.22, smoothstep(0.50, 1.80, size));
+  float graupelZdr = mix(-0.10, 0.08, smoothstep(0.55, 1.60, size));
+  float hailZdr = -mix(0.05, 0.70, smoothstep(0.75, 2.40, size));
+
+  float targetZdrDb = rainness * rainZdr +
+                      snowness * snowZdr +
+                      graupelness * graupelZdr +
+                      hailness * hailZdr +
+                      wetHailness * wetHailZdr +
+                      meltingness * meltingZdr;
+  targetZdrDb = clamp(targetZdrDb, -1.25, 6.80);
+
+  float baseMoment = radarPresence * (waterMoment + iceMoment) * (1.0 + brightBand * 0.85);
+  float zdrRatio = pow(10.0, targetZdrDb / 10.0);
+  float zh = baseMoment * (2.0 * zdrRatio / (1.0 + zdrRatio));
+  float zv = baseMoment * (2.0 / (1.0 + zdrRatio));
 
   float particleRho = clamp(
     rainness * mix(0.992, 0.986, smoothstep(0.50, 1.80, size)) +

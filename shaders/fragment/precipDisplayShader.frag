@@ -104,17 +104,30 @@ void main()
     return;
   }
 
-  float r2 = dot(spriteUV, spriteUV);
+  vec4 primary;
+  vec2 secondary;
+  hydrometeorMemberships(max(mass_out[WATER], 0.0), max(mass_out[ICE], 0.0), density_out, max(size_out, 0.0), compactness_out, primary, secondary);
+
+  float displaySize = max(size_out, 0.0);
+  float rainDisplayFlatten = smoothstep(0.55, 2.20, displaySize) * 0.56;
+  float mixedDisplayFlatten = smoothstep(0.65, 2.05, displaySize) * 0.28;
+  float snowDisplayFlatten = smoothstep(0.75, 1.65, displaySize) * 0.08;
+  float displayFlattening = rainDisplayFlatten * primary.r +
+                            mixedDisplayFlatten * (secondary.g * 0.70 + secondary.r * 0.32) +
+                            snowDisplayFlatten * (primary.g * 0.60 + primary.b * 0.35);
+  displayFlattening = clamp(displayFlattening, 0.0, 0.58);
+
+  vec2 shapeUV = spriteUV;
+  shapeUV.x /= 1.0 + displayFlattening * 0.68;
+  shapeUV.y /= max(1.0 - displayFlattening * 0.82, 0.50);
+
+  float r2 = dot(shapeUV, shapeUV);
   if (r2 > 1.0)
     discard;
   float spriteMask = 1.0 - smoothstep(0.35, 1.0, r2);
 
   float opacity = (mass_out[WATER] + mass_out[ICE]) * 0.10;
   opacity *= spriteMask;
-
-  vec4 primary;
-  vec2 secondary;
-  hydrometeorMemberships(max(mass_out[WATER], 0.0), max(mass_out[ICE], 0.0), density_out, max(size_out, 0.0), compactness_out, primary, secondary);
 
   vec3 rainColor = vec3(0.0, 0.5, 1.0);
   vec3 snowColor = vec3(1.0);

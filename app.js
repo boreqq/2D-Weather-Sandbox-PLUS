@@ -376,8 +376,8 @@ const RADAR_PRODUCTS = Object.freeze([
     label : 'zdr',
     launcherLabel : 'zdr',
     shortDescription : 'Differential reflectivity',
-    isImplemented : false,
-    displayMode : null,
+    isImplemented : true,
+    displayMode : 'DISP_ZDR',
   },
   {
     id : RADAR_PRODUCT_KDP,
@@ -403,6 +403,554 @@ const RADAR_PRODUCTS_BY_ID = Object.freeze(
     return acc;
   }, {})
 );
+
+const RADAR_PALETTE_STORAGE_VERSION = 1;
+const RADAR_PALETTE_TEXTURE_UNIT = 11;
+const RADAR_PALETTE_TEXTURE_WIDTH = 512;
+const RADAR_BUILTIN_PALETTE_PREFIX = 'builtin:';
+const RADAR_CUSTOM_PALETTE_PREFIX = 'custom:';
+const RADAR_PRODUCT_TEXTURE_ROW_BY_ID = Object.freeze(
+  RADAR_PRODUCTS.reduce((acc, product, index) => {
+    acc[product.id] = index;
+    return acc;
+  }, {})
+);
+const RADAR_PRODUCT_PAL_CODES_BY_ID = Object.freeze({
+  [RADAR_PRODUCT_REFLECTIVITY] : [ 'BR', 'DB', 'DR' ],
+  [RADAR_PRODUCT_RHOHV] : [ 'CC', 'RHOHV', 'RHO' ],
+  [RADAR_PRODUCT_ZDR] : [ 'ZDR' ],
+  [RADAR_PRODUCT_KDP] : [ 'KDP', 'PHI' ],
+  [RADAR_PRODUCT_RADIAL_VELOCITY] : [ 'BV', 'DV', 'SRV', 'VEL', 'VR' ],
+});
+
+function cloneGuiValue(value)
+{
+  if (Array.isArray(value) || (value && typeof value == 'object'))
+    return JSON.parse(JSON.stringify(value));
+  return value;
+}
+
+function clampNumber(value, min, max)
+{
+  return Math.min(max, Math.max(min, value));
+}
+
+function clampByte(value)
+{
+  return Math.round(clampNumber(value, 0, 255));
+}
+
+function getBuiltinRadarPaletteId(productId)
+{
+  return RADAR_BUILTIN_PALETTE_PREFIX + productId;
+}
+
+function createRadarPaletteEntry(value, colorStart, mode, colorEnd)
+{
+  return {
+    value,
+    colorStart : colorStart.slice(0, 4),
+    colorEnd : colorEnd ? colorEnd.slice(0, 4) : null,
+    mode,
+  };
+}
+
+const FALLBACK_RADAR_PALETTE_DEFINITION = Object.freeze({
+  id : getBuiltinRadarPaletteId('GENERIC'),
+  name : 'Default',
+  range : [ 0.0, 1.0 ],
+  entries : [
+    createRadarPaletteEntry(0.0, [ 42, 49, 63, 255 ], 'smooth', [ 214, 223, 235, 255 ]),
+    createRadarPaletteEntry(1.0, [ 214, 223, 235, 255 ], 'solid'),
+  ],
+});
+
+const DEFAULT_RADAR_PALETTE_DEFINITIONS = Object.freeze({
+  [RADAR_PRODUCT_REFLECTIVITY] : Object.freeze({
+    id : getBuiltinRadarPaletteId(RADAR_PRODUCT_REFLECTIVITY),
+    name : 'Default',
+    range : [ -15.0, 95.0 ],
+    entries : [
+      createRadarPaletteEntry(-15.0, [ 0, 0, 0, 255 ], 'smooth'),
+      createRadarPaletteEntry(5.0, [ 29, 37, 60, 255 ], 'smooth'),
+      createRadarPaletteEntry(17.5, [ 89, 155, 171, 255 ], 'smooth'),
+      createRadarPaletteEntry(22.5, [ 33, 186, 72, 255 ], 'smooth'),
+      createRadarPaletteEntry(32.5, [ 5, 101, 1, 255 ], 'smooth'),
+      createRadarPaletteEntry(37.5, [ 251, 252, 0, 255 ], 'smooth'),
+      createRadarPaletteEntry(42.5, [ 253, 149, 2, 255 ], 'smooth'),
+      createRadarPaletteEntry(50.0, [ 253, 38, 0, 255 ], 'smooth'),
+      createRadarPaletteEntry(60.0, [ 193, 148, 179, 255 ], 'smooth'),
+      createRadarPaletteEntry(70.0, [ 165, 2, 215, 255 ], 'smooth'),
+      createRadarPaletteEntry(75.0, [ 135, 255, 253, 255 ], 'smooth'),
+      createRadarPaletteEntry(80.0, [ 173, 99, 64, 255 ], 'smooth'),
+      createRadarPaletteEntry(85.0, [ 105, 0, 4, 255 ], 'smooth', [ 0, 0, 0, 255 ]),
+      createRadarPaletteEntry(95.0, [ 0, 0, 0, 255 ], 'solid'),
+    ],
+  }),
+  [RADAR_PRODUCT_RHOHV] : Object.freeze({
+    id : getBuiltinRadarPaletteId(RADAR_PRODUCT_RHOHV),
+    name : 'Default',
+    range : [ 0.0, 1.05 ],
+    entries : [
+      createRadarPaletteEntry(0.0, [ 15, 15, 140, 255 ], 'smooth'),
+      createRadarPaletteEntry(0.45, [ 15, 15, 140, 255 ], 'smooth'),
+      createRadarPaletteEntry(0.60, [ 10, 10, 190, 255 ], 'smooth'),
+      createRadarPaletteEntry(0.75, [ 120, 120, 255, 255 ], 'smooth'),
+      createRadarPaletteEntry(0.80, [ 95, 245, 100, 255 ], 'smooth'),
+      createRadarPaletteEntry(0.85, [ 135, 215, 10, 255 ], 'smooth'),
+      createRadarPaletteEntry(0.90, [ 255, 255, 0, 255 ], 'smooth'),
+      createRadarPaletteEntry(0.95, [ 255, 140, 0, 255 ], 'smooth'),
+      createRadarPaletteEntry(0.97, [ 225, 3, 0, 255 ], 'smooth'),
+      createRadarPaletteEntry(0.99, [ 139, 30, 77, 255 ], 'smooth'),
+      createRadarPaletteEntry(1.00, [ 255, 180, 215, 255 ], 'smooth'),
+      createRadarPaletteEntry(1.05, [ 164, 54, 150, 255 ], 'solid'),
+    ],
+  }),
+  [RADAR_PRODUCT_ZDR] : Object.freeze({
+    id : getBuiltinRadarPaletteId(RADAR_PRODUCT_ZDR),
+    name : 'Default',
+    range : [ -3.0, 7.0 ],
+    entries : [
+      createRadarPaletteEntry(-3.0, [ 63, 0, 108, 255 ], 'smooth', [ 137, 0, 137, 255 ]),
+      createRadarPaletteEntry(-1.5, [ 137, 0, 137, 255 ], 'smooth', [ 255, 255, 255, 255 ]),
+      createRadarPaletteEntry(0.0, [ 255, 255, 255, 255 ], 'smooth', [ 0, 189, 246, 255 ]),
+      createRadarPaletteEntry(1.5, [ 0, 189, 246, 255 ], 'smooth', [ 70, 210, 45, 255 ]),
+      createRadarPaletteEntry(3.0, [ 70, 210, 45, 255 ], 'smooth', [ 255, 244, 0, 255 ]),
+      createRadarPaletteEntry(4.0, [ 255, 244, 0, 255 ], 'smooth', [ 255, 0, 0, 255 ]),
+      createRadarPaletteEntry(7.0, [ 255, 0, 0, 255 ], 'solid'),
+    ],
+  }),
+});
+
+function getDefaultRadarPaletteDefinition(productId)
+{
+  return DEFAULT_RADAR_PALETTE_DEFINITIONS[productId] || FALLBACK_RADAR_PALETTE_DEFINITION;
+}
+
+function createDefaultRadarPaletteState()
+{
+  const products = {};
+
+  for (const product of RADAR_PRODUCTS) {
+    products[product.id] = {
+      selectedPaletteId : getBuiltinRadarPaletteId(product.id),
+      customPalettes : [],
+    };
+  }
+
+  return {
+    version : RADAR_PALETTE_STORAGE_VERSION,
+    products,
+  };
+}
+
+function normalizeRadarPaletteColor(rawColor)
+{
+  if (!Array.isArray(rawColor) || (rawColor.length != 3 && rawColor.length != 4))
+    return null;
+
+  const color = rawColor.slice(0, 4).map(Number);
+  if (color.some((value) => !Number.isFinite(value)))
+    return null;
+
+  if (color.length == 3)
+    color.push(255);
+
+  return color.map(clampByte);
+}
+
+function normalizeRadarPaletteEntry(rawEntry, order)
+{
+  if (!rawEntry || typeof rawEntry != 'object')
+    return null;
+
+  const value = Number(rawEntry.value);
+  const colorStart = normalizeRadarPaletteColor(rawEntry.colorStart || rawEntry.color || rawEntry.startColor);
+  const colorEnd = normalizeRadarPaletteColor(rawEntry.colorEnd || rawEntry.intervalEndColor || rawEntry.endColor);
+
+  if (!Number.isFinite(value) || !colorStart)
+    return null;
+
+  return {
+    value,
+    colorStart,
+    colorEnd,
+    mode : rawEntry.mode == 'solid' ? 'solid' : 'smooth',
+    order,
+  };
+}
+
+function normalizeRadarPaletteDefinition(rawPalette, productId, fallbackName)
+{
+  if (!rawPalette || typeof rawPalette != 'object')
+    return null;
+
+  const entries = Array.isArray(rawPalette.entries) ? rawPalette.entries
+    .map((entry, index) => normalizeRadarPaletteEntry(entry, index))
+    .filter(Boolean) : [];
+
+  if (!entries.length)
+    return null;
+
+  entries.sort((left, right) => {
+    if (left.value != right.value)
+      return left.value - right.value;
+    return left.order - right.order;
+  });
+
+  let range = Array.isArray(rawPalette.range) && rawPalette.range.length == 2 ? [ Number(rawPalette.range[0]), Number(rawPalette.range[1]) ] : null;
+  if (!range || !Number.isFinite(range[0]) || !Number.isFinite(range[1]) || range[1] <= range[0]) {
+    range = [ entries[0].value, entries[entries.length - 1].value ];
+  }
+  if (range[1] <= range[0])
+    range[1] = range[0] + 1.0;
+
+  return {
+    id : typeof rawPalette.id == 'string' && rawPalette.id ? rawPalette.id : getBuiltinRadarPaletteId(productId),
+    name : typeof rawPalette.name == 'string' && rawPalette.name.trim() ? rawPalette.name.trim() : fallbackName,
+    sourceFilename : typeof rawPalette.sourceFilename == 'string' ? rawPalette.sourceFilename : '',
+    meta : rawPalette.meta && typeof rawPalette.meta == 'object' ? {
+      productCode : typeof rawPalette.meta.productCode == 'string' ? rawPalette.meta.productCode : '',
+      units : typeof rawPalette.meta.units == 'string' ? rawPalette.meta.units : '',
+      scale : Number.isFinite(Number(rawPalette.meta.scale)) ? Number(rawPalette.meta.scale) : 1.0,
+      offset : Number.isFinite(Number(rawPalette.meta.offset)) ? Number(rawPalette.meta.offset) : 0.0,
+    } : {
+      productCode : '',
+      units : '',
+      scale : 1.0,
+      offset : 0.0,
+    },
+    range,
+    entries : entries.map((entry) => ({
+      value : entry.value,
+      colorStart : entry.colorStart.slice(),
+      colorEnd : entry.colorEnd ? entry.colorEnd.slice() : null,
+      mode : entry.mode,
+    })),
+  };
+}
+
+function normalizeRadarPaletteState(rawState)
+{
+  const defaultState = createDefaultRadarPaletteState();
+  const normalizedState = {
+    version : RADAR_PALETTE_STORAGE_VERSION,
+    products : {},
+  };
+
+  const rawProducts = rawState && typeof rawState == 'object' && rawState.products && typeof rawState.products == 'object' ? rawState.products : {};
+
+  for (const product of RADAR_PRODUCTS) {
+    const rawProductState = rawProducts[product.id];
+    const normalizedProductState = {
+      selectedPaletteId : getBuiltinRadarPaletteId(product.id),
+      customPalettes : [],
+    };
+
+    if (rawProductState && typeof rawProductState == 'object') {
+      if (typeof rawProductState.selectedPaletteId == 'string' && rawProductState.selectedPaletteId)
+        normalizedProductState.selectedPaletteId = rawProductState.selectedPaletteId;
+
+      if (Array.isArray(rawProductState.customPalettes)) {
+        normalizedProductState.customPalettes = rawProductState.customPalettes
+          .map((palette, index) => normalizeRadarPaletteDefinition(palette, product.id, 'Custom ' + (index + 1)))
+          .filter(Boolean);
+      }
+    }
+
+    const hasSelectedCustomPalette = normalizedProductState.customPalettes.some((palette) => palette.id == normalizedProductState.selectedPaletteId);
+    if (!hasSelectedCustomPalette && normalizedProductState.selectedPaletteId != getBuiltinRadarPaletteId(product.id))
+      normalizedProductState.selectedPaletteId = defaultState.products[product.id].selectedPaletteId;
+
+    normalizedState.products[product.id] = normalizedProductState;
+  }
+
+  return normalizedState;
+}
+
+function getRadarPaletteStateForProduct(productId)
+{
+  if (!guiControls || !guiControls.radarPaletteState)
+    return null;
+  return guiControls.radarPaletteState.products[productId] || null;
+}
+
+function getSelectedRadarPaletteDefinition(productId)
+{
+  const productState = getRadarPaletteStateForProduct(productId);
+  const builtinPaletteId = getBuiltinRadarPaletteId(productId);
+  if (!productState)
+    return getDefaultRadarPaletteDefinition(productId);
+
+  if (productState.selectedPaletteId != builtinPaletteId) {
+    const customPalette = productState.customPalettes.find((palette) => palette.id == productState.selectedPaletteId);
+    if (customPalette)
+      return customPalette;
+  }
+
+  return getDefaultRadarPaletteDefinition(productId);
+}
+
+function sampleRadarPaletteDefinition(paletteDefinition, value)
+{
+  const entries = paletteDefinition.entries;
+  if (!entries.length)
+    return [ 255, 255, 255, 255 ];
+
+  if (value <= entries[0].value)
+    return entries[0].colorStart.slice();
+
+  for (let index = 0; index < entries.length - 1; index++) {
+    const currentEntry = entries[index];
+    const nextEntry = entries[index + 1];
+
+    if (value <= nextEntry.value) {
+      const startColor = currentEntry.colorStart;
+      const endColor = currentEntry.colorEnd || nextEntry.colorStart;
+
+      if (currentEntry.mode == 'solid' || nextEntry.value <= currentEntry.value)
+        return endColor.slice();
+
+      const amount = clampNumber((value - currentEntry.value) / (nextEntry.value - currentEntry.value), 0.0, 1.0);
+      return [
+        Math.round(startColor[0] + (endColor[0] - startColor[0]) * amount),
+        Math.round(startColor[1] + (endColor[1] - startColor[1]) * amount),
+        Math.round(startColor[2] + (endColor[2] - startColor[2]) * amount),
+        Math.round(startColor[3] + (endColor[3] - startColor[3]) * amount),
+      ];
+    }
+  }
+
+  const lastEntry = entries[entries.length - 1];
+  return (lastEntry.colorEnd || lastEntry.colorStart).slice();
+}
+
+function updateRadarPaletteTexture()
+{
+  if (!gl || !radarPaletteTexture || !guiControls || !guiControls.radarPaletteState)
+    return;
+
+  const rowCount = RADAR_PRODUCTS.length;
+  const pixelData = new Uint8Array(RADAR_PALETTE_TEXTURE_WIDTH * rowCount * 4);
+
+  for (const product of RADAR_PRODUCTS) {
+    const paletteDefinition = getSelectedRadarPaletteDefinition(product.id);
+    const rowIndex = RADAR_PRODUCT_TEXTURE_ROW_BY_ID[product.id];
+    const rangeStart = paletteDefinition.range[0];
+    const rangeEnd = paletteDefinition.range[1];
+
+    for (let x = 0; x < RADAR_PALETTE_TEXTURE_WIDTH; x++) {
+      const amount = RADAR_PALETTE_TEXTURE_WIDTH > 1 ? x / (RADAR_PALETTE_TEXTURE_WIDTH - 1) : 0.0;
+      const value = rangeStart + (rangeEnd - rangeStart) * amount;
+      const color = sampleRadarPaletteDefinition(paletteDefinition, value);
+      const dataIndex = (rowIndex * RADAR_PALETTE_TEXTURE_WIDTH + x) * 4;
+      pixelData[dataIndex + 0] = color[0];
+      pixelData[dataIndex + 1] = color[1];
+      pixelData[dataIndex + 2] = color[2];
+      pixelData[dataIndex + 3] = color[3];
+    }
+  }
+
+  gl.activeTexture(gl.TEXTURE0 + RADAR_PALETTE_TEXTURE_UNIT);
+  gl.bindTexture(gl.TEXTURE_2D, radarPaletteTexture);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, RADAR_PALETTE_TEXTURE_WIDTH, rowCount, 0, gl.RGBA, gl.UNSIGNED_BYTE, pixelData);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+}
+
+function getRadarPaletteRowCenter(productId)
+{
+  const rowIndex = RADAR_PRODUCT_TEXTURE_ROW_BY_ID[productId] || 0;
+  return (rowIndex + 0.5) / RADAR_PRODUCTS.length;
+}
+
+function applyRadarPaletteUniforms(program, productId)
+{
+  const paletteDefinition = getSelectedRadarPaletteDefinition(productId);
+  gl.uniform2f(gl.getUniformLocation(program, 'radarPaletteRange'), paletteDefinition.range[0], paletteDefinition.range[1]);
+  gl.uniform1f(gl.getUniformLocation(program, 'radarPaletteRowCenter'), getRadarPaletteRowCenter(productId));
+}
+
+function makeCustomRadarPaletteId()
+{
+  return RADAR_CUSTOM_PALETTE_PREFIX + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
+}
+
+function getRadarPaletteNameFromFilename(fileName)
+{
+  if (typeof fileName != 'string' || !fileName)
+    return 'Custom palette';
+
+  const segments = fileName.split('.');
+  if (segments.length > 1)
+    segments.pop();
+
+  const baseName = segments.join('.').trim();
+  return baseName || 'Custom palette';
+}
+
+function isRadarPaletteCompatibleWithProduct(productId, productCode)
+{
+  if (!productCode)
+    return true;
+
+  const acceptedCodes = RADAR_PRODUCT_PAL_CODES_BY_ID[productId];
+  if (!acceptedCodes || !acceptedCodes.length)
+    return true;
+
+  return acceptedCodes.includes(productCode.toUpperCase());
+}
+
+function convertPalValueToProductUnits(rawValue, productId, units, scale, offset)
+{
+  let value = rawValue;
+
+  if (Number.isFinite(offset) && offset !== 0.0)
+    value -= offset;
+
+  if (Number.isFinite(scale) && scale !== 0.0 && scale !== 1.0)
+    value /= scale;
+
+  const normalizedUnits = typeof units == 'string' ? units.toUpperCase() : '';
+  if (productId == RADAR_PRODUCT_RHOHV && value > 1.5 && (normalizedUnits == '%' || normalizedUnits == 'PERCENT'))
+    value /= 100.0;
+
+  return value;
+}
+
+function parsePalLineNumbers(line)
+{
+  const matches = line.match(/[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/g);
+  if (!matches)
+    return [];
+  return matches.map(Number).filter(Number.isFinite);
+}
+
+function parseRadarPaletteFile(text, productId, sourceFilename)
+{
+  const lines = text.replace(/\ufeff/g, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  const entries = [];
+  let productCode = '';
+  let units = '';
+  let scale = 1.0;
+  let offset = 0.0;
+  let order = 0;
+
+  for (const rawLine of lines) {
+    let line = rawLine;
+    const semicolonIndex = line.indexOf(';');
+    if (semicolonIndex >= 0)
+      line = line.slice(0, semicolonIndex);
+    line = line.trim();
+
+    if (!line || line.startsWith('#') || line.startsWith('//'))
+      continue;
+
+    const colonIndex = line.indexOf(':');
+    if (colonIndex >= 0) {
+      const keyword = line.slice(0, colonIndex).trim().toUpperCase();
+      const payload = line.slice(colonIndex + 1).trim();
+
+      if (keyword == 'PRODUCT') {
+        productCode = payload.split(/\s+/)[0].toUpperCase();
+        continue;
+      }
+      if (keyword == 'UNITS') {
+        units = payload.split(/\s+/)[0].toUpperCase();
+        continue;
+      }
+      if (keyword == 'SCALE') {
+        const parsedScale = Number(parsePalLineNumbers(payload)[0]);
+        if (Number.isFinite(parsedScale) && parsedScale !== 0.0)
+          scale = parsedScale;
+        continue;
+      }
+      if (keyword == 'OFFSET') {
+        const parsedOffset = Number(parsePalLineNumbers(payload)[0]);
+        if (Number.isFinite(parsedOffset))
+          offset = parsedOffset;
+        continue;
+      }
+
+      const isColorDirective = keyword == 'COLOR' || keyword == 'COLOR4' || keyword == 'SOLIDCOLOR' || keyword == 'SOLIDCOLOR4';
+      if (!isColorDirective)
+        continue;
+
+      const numericValues = parsePalLineNumbers(payload);
+      const colorChannelCount = keyword.endsWith('4') ? 4 : 3;
+      if (numericValues.length < 1 + colorChannelCount)
+        continue;
+
+      const startColor = numericValues.slice(1, 1 + colorChannelCount);
+      const endColor = numericValues.length >= 1 + colorChannelCount * 2 ? numericValues.slice(1 + colorChannelCount, 1 + colorChannelCount * 2) : null;
+      const convertedValue = convertPalValueToProductUnits(numericValues[0], productId, units, scale, offset);
+      const normalizedStartColor = normalizeRadarPaletteColor(startColor);
+      const normalizedEndColor = normalizeRadarPaletteColor(endColor);
+
+      if (!normalizedStartColor)
+        continue;
+
+      entries.push({
+        value : convertedValue,
+        colorStart : normalizedStartColor,
+        colorEnd : normalizedEndColor,
+        mode : keyword.startsWith('SOLID') ? 'solid' : 'smooth',
+        order : order++,
+      });
+      continue;
+    }
+
+    const numericValues = parsePalLineNumbers(line);
+    if (numericValues.length >= 4) {
+      const hasAlpha = numericValues.length >= 5;
+      const color = hasAlpha ? numericValues.slice(1, 5) : numericValues.slice(1, 4);
+      const normalizedColor = normalizeRadarPaletteColor(color);
+
+      if (!normalizedColor)
+        continue;
+
+      entries.push({
+        value : convertPalValueToProductUnits(numericValues[0], productId, units, scale, offset),
+        colorStart : normalizedColor,
+        colorEnd : null,
+        mode : 'solid',
+        order : order++,
+      });
+    }
+  }
+
+  if (!entries.length)
+    throw new Error('Unsupported or empty .pal file.');
+
+  entries.sort((left, right) => {
+    if (left.value != right.value)
+      return left.value - right.value;
+    return left.order - right.order;
+  });
+
+  const normalizedEntries = entries.map((entry) => ({
+    value : entry.value,
+    colorStart : entry.colorStart.slice(),
+    colorEnd : entry.colorEnd ? entry.colorEnd.slice() : null,
+    mode : entry.mode,
+  }));
+
+  return {
+    id : makeCustomRadarPaletteId(),
+    name : getRadarPaletteNameFromFilename(sourceFilename),
+    sourceFilename : sourceFilename || '',
+    meta : {
+      productCode,
+      units,
+      scale,
+      offset,
+    },
+    range : [ normalizedEntries[0].value, normalizedEntries[normalizedEntries.length - 1].value ],
+    entries : normalizedEntries,
+  };
+}
 
 const guiControls_default = {
   vorticity : 0.005,
@@ -468,10 +1016,16 @@ const guiControls_default = {
   rhohvPixelSize : 8,
   rhohvLowCCArtifacts : true,
   rhohvClutterDensity : 1.0,
+  zdrBackground : true,
+  debugZdr : false,
+  zdrPixelSize : 8,
+  zdrFillRadius : 2,
+  zdrMaskDbz : 10.0,
   reflectivityRefreshSec : 2.0,
   radarProduct : RADAR_PRODUCT_REFLECTIVITY, // legacy save compatibility only
   selectedRadarProduct : RADAR_PRODUCT_REFLECTIVITY,
   lastLiveRadarProduct : RADAR_PRODUCT_REFLECTIVITY,
+  radarPaletteState : createDefaultRadarPaletteState(),
   realDewPoint : false, // show real dew point in graph, instead of dew point with cloud water included
   enablePrecipitation : true,
   showDrops : false,
@@ -508,6 +1062,8 @@ function getRadarProductIdForDisplayMode(displayMode)
     return RADAR_PRODUCT_REFLECTIVITY;
   if (displayMode == 'DISP_RHOHV')
     return RADAR_PRODUCT_RHOHV;
+  if (displayMode == 'DISP_ZDR')
+    return RADAR_PRODUCT_ZDR;
   return null;
 }
 
@@ -534,6 +1090,9 @@ var saveFileName = '';
 
 var guiControlsFromSaveFile = null;
 var datGui;
+var radarPaletteTexture;
+var radarPaletteFileInputEl;
+var radarPaletteImportTargetProductId = null;
 
 var sim_res_x;
 var sim_res_y;
@@ -884,6 +1443,7 @@ function calcDropletRadarMetrics(waterMass, iceMass, density, size, compactness 
       zh : 0.0,
       zv : 0.0,
       hv : 0.0,
+      zdrDb : 0.0,
       hSize : 0.0,
       vSize : 0.0,
       flattening : 0.0,
@@ -899,9 +1459,9 @@ function calcDropletRadarMetrics(waterMass, iceMass, density, size, compactness 
   const iceFraction = ice / Math.max(total, 1e-6);
   const hydro = computeHydrometeorMemberships(liquid, ice, density, size, compactness);
 
-  const rainFlatten = Math.min(Math.max((size - 0.45) * 0.35, 0.0), 0.22);
-  const mixedFlatten = Math.min(Math.max((size - 0.50) * 0.18, 0.0), 0.10);
-  const snowFlatten = Math.min(Math.max((size - 0.60) * 0.08, 0.0), 0.04);
+  const rainFlatten = Math.min(Math.max((size - 0.35) * 0.26, 0.0), 0.38);
+  const mixedFlatten = Math.min(Math.max((size - 0.45) * 0.14, 0.0), 0.16);
+  const snowFlatten = Math.min(Math.max((size - 0.55) * 0.05, 0.0), 0.05);
   const flattening = rainFlatten * hydro.rain +
                      mixedFlatten * (hydro.melting * 0.55 + hydro.wetHail * 0.18) +
                      snowFlatten * (hydro.snow * 0.70 + hydro.graupel * 0.35);
@@ -919,10 +1479,28 @@ function calcDropletRadarMetrics(waterMass, iceMass, density, size, compactness 
 
   const brightBand = hydro.melting * 0.08 + hydro.wetHail * 0.05;
 
-  const baseMoment = radarPresence * (waterMoment + iceMoment);
-  const zh = baseMoment * (1.0 + brightBand + flattening * 0.04);
-  let zv = radarPresence * (waterMoment * Math.max(1.0 - flattening * 0.55, 0.60) + iceMoment * Math.max(1.0 - flattening * 0.10, 0.90));
-  zv *= (1.0 + brightBand * 0.65);
+  const largeRainTail = smoothstepJS(1.55, 2.70, size);
+  const giantRainTail = smoothstepJS(2.05, 3.00, size);
+  const meltingTail = smoothstepJS(1.45, 2.30, size);
+  const rainZdr = mixJS(0.12, 2.45, smoothstepJS(0.45, 1.55, size)) + flattening * 1.10 + largeRainTail * 0.78 + giantRainTail * 3.00;
+  const meltingZdr = mixJS(0.22, 1.55, smoothstepJS(0.45, 1.55, size)) + flattening * 0.82 + meltingTail * 0.22;
+  const wetHailZdr = mixJS(-0.10, 0.70, smoothstepJS(0.70, 2.00, size)) + flattening * 0.35;
+  const snowZdr = mixJS(0.02, 0.22, smoothstepJS(0.50, 1.80, size));
+  const graupelZdr = mixJS(-0.10, 0.08, smoothstepJS(0.55, 1.60, size));
+  const hailZdr = -mixJS(0.05, 0.70, smoothstepJS(0.75, 2.40, size));
+
+  let targetZdrDb = hydro.rain * rainZdr +
+                    hydro.snow * snowZdr +
+                    hydro.graupel * graupelZdr +
+                    hydro.hail * hailZdr +
+                    hydro.wetHail * wetHailZdr +
+                    hydro.melting * meltingZdr;
+  targetZdrDb = Math.min(Math.max(targetZdrDb, -1.25), 6.80);
+
+  const baseMoment = radarPresence * (waterMoment + iceMoment) * (1.0 + brightBand * 0.85);
+  const zdrRatio = Math.pow(10.0, targetZdrDb / 10.0);
+  const zh = baseMoment * (2.0 * zdrRatio / (1.0 + zdrRatio));
+  const zv = baseMoment * (2.0 / (1.0 + zdrRatio));
 
   const hSize = size * (1.0 + flattening * 0.60);
   const vSize = size * Math.max(1.0 - flattening * 0.75, 0.55);
@@ -936,10 +1514,13 @@ function calcDropletRadarMetrics(waterMass, iceMass, density, size, compactness 
     hydro.rain * flattening * 0.04
   );
 
+  const zdrDb = 10.0 * Math.log10((zh + 1e-6) / (zv + 1e-6));
+
   return {
     zh,
     zv,
     hv : particleRho * Math.sqrt(Math.max(zh * zv, 0.0)),
+    zdrDb,
     hSize,
     vSize,
     flattening,
@@ -4135,14 +4716,17 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     for (const [key, value] of Object.entries(guiControls_default)) {
       if (guiControls[key] === undefined) {
-        guiControls[key] = value;
+        guiControls[key] = cloneGuiValue(value);
       }
     }
 
+    guiControls.radarPaletteState = normalizeRadarPaletteState(guiControls.radarPaletteState);
     guiControls.tool = 'TOOL_NONE';
 
-    if (!hadSavedSelectedRadarProduct && !hadSavedLastLiveRadarProduct && guiControls.radarProduct == RADAR_PRODUCT_RHOHV) {
-      guiControls.displayMode = 'DISP_RHOHV';
+    if (!hadSavedSelectedRadarProduct && !hadSavedLastLiveRadarProduct && isImplementedRadarProduct(guiControls.radarProduct)) {
+      const legacyDisplayMode = getDisplayModeForRadarProduct(guiControls.radarProduct);
+      if (legacyDisplayMode)
+        guiControls.displayMode = legacyDisplayMode;
     }
 
     normalizeRadarGuiState();
@@ -4174,6 +4758,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         handleRadarUiExternalChange();
       }
     };
+
+    updateRadarPaletteTexture();
 
     var fluidParams_folder = datGui.addFolder('Fluid');
 
@@ -4484,7 +5070,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         'Curl' : 'DISP_CURL',
         'Air Quality' : 'DISP_AIRQUALITY',
         'Reflectivity (beta)' : 'DISP_REFLECTIVITY',
-        'Correlation Coefficient (ρhv)' : 'DISP_RHOHV'
+        'Correlation Coefficient (rhohv)' : 'DISP_RHOHV',
+        'Differential Reflectivity (ZDR)' : 'DISP_ZDR'
       })
       .name('Display Mode')
       .onChange(function() {
@@ -4627,10 +5214,34 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     var rhohv_folder = datGui.addFolder('Correlation Coefficient');
     rhohv_folder.add(guiControls, 'rhohvLowCCArtifacts').onChange(handleRadarUiExternalChange).name('Low CC Artifacts').listen();
     rhohv_folder.add(guiControls, 'rhohvClutterDensity', 0.0, 3.0, 0.01).onChange(handleRadarUiExternalChange).name('Clutter Density').listen();
-    rhohv_folder.add(guiControls, 'rhohvBackground').onChange(handleRadarUiExternalChange).name('ρhv Background').listen();
-    rhohv_folder.add(guiControls, 'debugRhohv').onChange(handleRadarUiExternalChange).name('Debug ρhv at Cursor').listen();
+    rhohv_folder.add(guiControls, 'rhohvBackground').onChange(handleRadarUiExternalChange).name('rhohv Background').listen();
+    rhohv_folder.add(guiControls, 'debugRhohv').onChange(handleRadarUiExternalChange).name('Debug rhohv at Cursor').listen();
     rhohv_folder.add(guiControls, 'rhohvPixelSize', 1, 32, 1)
-      .name('ρhv Pixel Size')
+      .name('rhohv Pixel Size')
+      .onChange(function() {
+        lastReflectivitySnapshotTime = -Infinity;
+        handleRadarUiExternalChange();
+      })
+      .listen();
+
+    var zdr_folder = datGui.addFolder('Differential Reflectivity');
+    zdr_folder.add(guiControls, 'zdrBackground').onChange(handleRadarUiExternalChange).name('ZDR Background').listen();
+    zdr_folder.add(guiControls, 'debugZdr').onChange(handleRadarUiExternalChange).name('Debug ZDR at Cursor').listen();
+    zdr_folder.add(guiControls, 'zdrPixelSize', 1, 32, 1)
+      .name('ZDR Pixel Size')
+      .onChange(function() {
+        handleRadarUiExternalChange();
+      })
+      .listen();
+    zdr_folder.add(guiControls, 'zdrFillRadius', 0, 4, 1)
+      .name('ZDR Fill Radius')
+      .onChange(function() {
+        lastReflectivitySnapshotTime = -Infinity;
+        handleRadarUiExternalChange();
+      })
+      .listen();
+    zdr_folder.add(guiControls, 'zdrMaskDbz', -10.0, 35.0, 0.1)
+      .name('ZDR Min dBZ')
       .onChange(function() {
         lastReflectivitySnapshotTime = -Infinity;
         handleRadarUiExternalChange();
@@ -4645,14 +5256,27 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     return displayMode == 'DISP_RHOHV';
   }
 
+  function isZdrMode(displayMode)
+  {
+    return displayMode == 'DISP_ZDR';
+  }
+
   function getRadarProductBackground(displayMode)
   {
-    return isRhohvMode(displayMode) ? guiControls.rhohvBackground : guiControls.reflectivityBackground;
+    if (isRhohvMode(displayMode))
+      return guiControls.rhohvBackground;
+    if (isZdrMode(displayMode))
+      return guiControls.zdrBackground;
+    return guiControls.reflectivityBackground;
   }
 
   function getRadarProductDebugEnabled(displayMode)
   {
-    return isRhohvMode(displayMode) ? guiControls.debugRhohv : guiControls.debugReflectivity;
+    if (isRhohvMode(displayMode))
+      return guiControls.debugRhohv;
+    if (isZdrMode(displayMode))
+      return guiControls.debugZdr;
+    return guiControls.debugReflectivity;
   }
 
   var radarDrawerRootEl = null;
@@ -4786,6 +5410,227 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     parent.appendChild(wrapper);
   }
 
+  function appendRadarSelectControl(parent, config)
+  {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'radar-control radar-control--select';
+
+    const topRow = document.createElement('div');
+    topRow.className = 'radar-control__toprow';
+
+    const labelEl = document.createElement('span');
+    labelEl.className = 'radar-control__label';
+    labelEl.textContent = config.label;
+    topRow.appendChild(labelEl);
+
+    if (config.valueLabel) {
+      const valueEl = document.createElement('span');
+      valueEl.className = 'radar-control__value';
+      valueEl.textContent = config.valueLabel;
+      topRow.appendChild(valueEl);
+    }
+
+    wrapper.appendChild(topRow);
+
+    const select = document.createElement('select');
+    select.className = 'radar-control__select';
+
+    for (const optionConfig of config.options) {
+      const option = document.createElement('option');
+      option.value = optionConfig.value;
+      option.textContent = optionConfig.label;
+      select.appendChild(option);
+    }
+
+    select.value = config.value;
+    select.addEventListener('change', function(event) {
+      config.onChange(event.target.value);
+    });
+
+    wrapper.appendChild(select);
+    parent.appendChild(wrapper);
+  }
+
+  function appendRadarActionControl(parent, config)
+  {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'radar-control radar-control--actions';
+
+    if (config.label) {
+      const labelEl = document.createElement('span');
+      labelEl.className = 'radar-control__label';
+      labelEl.textContent = config.label;
+      wrapper.appendChild(labelEl);
+    }
+
+    const actionsEl = document.createElement('div');
+    actionsEl.className = 'radar-control__actions';
+
+    for (const actionConfig of config.actions) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'radar-control__button';
+      if (actionConfig.variant == 'danger')
+        button.classList.add('radar-control__button--danger');
+      button.textContent = actionConfig.label;
+      button.disabled = !!actionConfig.disabled;
+      button.addEventListener('click', function() {
+        if (!button.disabled)
+          actionConfig.onClick();
+      });
+      actionsEl.appendChild(button);
+    }
+
+    wrapper.appendChild(actionsEl);
+
+    if (config.note) {
+      const noteEl = document.createElement('span');
+      noteEl.className = 'radar-control__note';
+      noteEl.textContent = config.note;
+      wrapper.appendChild(noteEl);
+    }
+
+    parent.appendChild(wrapper);
+  }
+
+  function getRadarPaletteOptions(productId)
+  {
+    const productState = getRadarPaletteStateForProduct(productId);
+    const options = [
+      {
+        value : getBuiltinRadarPaletteId(productId),
+        label : 'Default',
+      },
+    ];
+
+    if (!productState)
+      return options;
+
+    for (const palette of productState.customPalettes) {
+      options.push({
+        value : palette.id,
+        label : palette.name,
+      });
+    }
+
+    return options;
+  }
+
+  function getSelectedCustomRadarPalette(productId)
+  {
+    const productState = getRadarPaletteStateForProduct(productId);
+    if (!productState)
+      return null;
+    return productState.customPalettes.find((palette) => palette.id == productState.selectedPaletteId) || null;
+  }
+
+  function requestRadarPaletteUpload(productId)
+  {
+    ensureRadarPanel();
+    if (!radarPaletteFileInputEl)
+      return;
+
+    radarPaletteImportTargetProductId = productId;
+    radarPaletteFileInputEl.value = '';
+    radarPaletteFileInputEl.click();
+  }
+
+  async function handleRadarPaletteFileSelection(event)
+  {
+    const file = event.target.files && event.target.files[0];
+    const productId = radarPaletteImportTargetProductId;
+    radarPaletteImportTargetProductId = null;
+
+    if (!file || !productId)
+      return;
+
+    try {
+      const paletteDefinition = normalizeRadarPaletteDefinition(
+        parseRadarPaletteFile(await file.text(), productId, file.name),
+        productId,
+        getRadarPaletteNameFromFilename(file.name)
+      );
+
+      if (!paletteDefinition)
+        throw new Error('The imported .pal file could not be normalized.');
+
+      const productState = getRadarPaletteStateForProduct(productId);
+      if (!productState)
+        throw new Error('Radar palette state is unavailable.');
+
+      productState.customPalettes.push(paletteDefinition);
+      productState.selectedPaletteId = paletteDefinition.id;
+      updateRadarPaletteTexture();
+      handleRadarUiExternalChange();
+
+      const importedProductCode = paletteDefinition.meta ? paletteDefinition.meta.productCode : '';
+      if (importedProductCode && !isRadarPaletteCompatibleWithProduct(productId, importedProductCode)) {
+        alert(
+          'Imported palette declares Product: ' + importedProductCode +
+          '. It was attached to ' + getRadarProductMeta(productId).label + ' anyway.'
+        );
+      }
+    } catch (error) {
+      alert('Failed to import .pal file: ' + error.message);
+    } finally {
+      event.target.value = '';
+    }
+  }
+
+  function removeSelectedCustomRadarPalette(productId)
+  {
+    const productState = getRadarPaletteStateForProduct(productId);
+    const selectedCustomPalette = getSelectedCustomRadarPalette(productId);
+
+    if (!productState || !selectedCustomPalette)
+      return;
+
+    if (!confirm('Remove custom palette "' + selectedCustomPalette.name + '" from ' + getRadarProductMeta(productId).label + '?'))
+      return;
+
+    productState.customPalettes = productState.customPalettes.filter((palette) => palette.id != selectedCustomPalette.id);
+    productState.selectedPaletteId = getBuiltinRadarPaletteId(productId);
+    updateRadarPaletteTexture();
+    handleRadarUiExternalChange();
+  }
+
+  function appendRadarPaletteControls(parent, productId)
+  {
+    const productState = getRadarPaletteStateForProduct(productId);
+    if (!productState)
+      return;
+
+    const customCount = productState.customPalettes.length;
+    appendRadarSelectControl(parent, {
+      label : 'Palette',
+      value : productState.selectedPaletteId,
+      valueLabel : customCount > 0 ? customCount + ' custom' : 'Default only',
+      options : getRadarPaletteOptions(productId),
+      onChange : function(nextPaletteId) {
+        productState.selectedPaletteId = nextPaletteId;
+        updateRadarPaletteTexture();
+        handleRadarUiExternalChange();
+      },
+    });
+
+    appendRadarActionControl(parent, {
+      label : 'Custom .pal',
+      actions : [
+        {
+          label : 'Upload .pal',
+          onClick : function() { requestRadarPaletteUpload(productId); },
+        },
+        {
+          label : 'Remove Custom',
+          variant : 'danger',
+          disabled : !getSelectedCustomRadarPalette(productId),
+          onClick : function() { removeSelectedCustomRadarPalette(productId); },
+        },
+      ],
+      note : 'Uploaded palettes are stored in simulation save files.',
+    });
+  }
+
   function renderRadarProductList()
   {
     if (!radarProductListEl)
@@ -4841,8 +5686,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       return;
 
     const product = getRadarProductMeta(guiControls.selectedRadarProduct);
-    radarSettingsTitleEl.textContent = product.label;
-    radarSettingsMetaEl.textContent = product.shortDescription;
     radarSettingsContentEl.replaceChildren();
 
     if (!product.isImplemented) {
@@ -4874,6 +5717,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       return;
     }
 
+    appendRadarPaletteControls(radarSettingsContentEl, product.id);
+
     if (product.id == RADAR_PRODUCT_REFLECTIVITY) {
       appendRadarToggleControl(
         radarSettingsContentEl,
@@ -4899,6 +5744,70 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         formatValue : function(value) { return Math.round(value).toString(); },
         onInput : function(value) {
           guiControls.reflectivityPixelSize = Math.round(value);
+          lastReflectivitySnapshotTime = -Infinity;
+        },
+      });
+      appendRadarRangeControl(radarSettingsContentEl, {
+        label : 'Radar Refresh (s)',
+        description : 'Shared refresh cadence for radar snapshots.',
+        min : 0,
+        max : 10,
+        step : 0.01,
+        getValue : function() { return guiControls.reflectivityRefreshSec; },
+        formatValue : function(value) { return formatRadarUiNumber(value, 2); },
+        onInput : function(value) { guiControls.reflectivityRefreshSec = value; },
+      });
+      return;
+    }
+
+    if (product.id == RADAR_PRODUCT_ZDR) {
+      appendRadarToggleControl(
+        radarSettingsContentEl,
+        'Background',
+        'Blend over terrain or render as a full radar view.',
+        guiControls.zdrBackground,
+        function(checked) { guiControls.zdrBackground = checked; }
+      );
+      appendRadarToggleControl(
+        radarSettingsContentEl,
+        'Debug At Cursor',
+        'Show sampled ZDR under the mouse cursor.',
+        guiControls.debugZdr,
+        function(checked) { guiControls.debugZdr = checked; }
+      );
+      appendRadarRangeControl(radarSettingsContentEl, {
+        label : 'Pixel Size',
+        description : 'Controls the blocky radar bin look for ZDR.',
+        min : 1,
+        max : 32,
+        step : 1,
+        getValue : function() { return guiControls.zdrPixelSize; },
+        formatValue : function(value) { return Math.round(value).toString(); },
+        onInput : function(value) { guiControls.zdrPixelSize = Math.round(value); },
+      });
+      appendRadarRangeControl(radarSettingsContentEl, {
+        label : 'Fill Radius',
+        description : 'Fills sparse gaps inside echo without softening the edge.',
+        min : 0,
+        max : 4,
+        step : 1,
+        getValue : function() { return guiControls.zdrFillRadius; },
+        formatValue : function(value) { return Math.round(value).toString(); },
+        onInput : function(value) {
+          guiControls.zdrFillRadius = Math.round(value);
+          lastReflectivitySnapshotTime = -Infinity;
+        },
+      });
+      appendRadarRangeControl(radarSettingsContentEl, {
+        label : 'Min dBZ',
+        description : 'Hard support threshold used to keep ZDR inside actual echo.',
+        min : -10,
+        max : 35,
+        step : 0.1,
+        getValue : function() { return guiControls.zdrMaskDbz; },
+        formatValue : function(value) { return formatRadarUiNumber(value, 1); },
+        onInput : function(value) {
+          guiControls.zdrMaskDbz = value;
           lastReflectivitySnapshotTime = -Infinity;
         },
       });
@@ -5004,9 +5913,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
             </button>
             <div id="radarSettingsBody" class="radar-settings-sheet__body">
               <div class="radar-settings">
-                <div class="radar-settings__eyebrow">Settings</div>
-                <div id="radarSettingsTitle" class="radar-settings__title"></div>
-                <div id="radarSettingsMeta" class="radar-settings__meta"></div>
                 <div id="radarSettingsContent" class="radar-settings__content"></div>
               </div>
             </div>
@@ -5026,9 +5932,14 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     radarSettingsToggleEl = document.getElementById('radarSettingsToggle');
     radarSettingsArrowEl = document.getElementById('radarSettingsArrow');
     radarSettingsPeekTitleEl = document.getElementById('radarSettingsPeekTitle');
-    radarSettingsTitleEl = document.getElementById('radarSettingsTitle');
-    radarSettingsMetaEl = document.getElementById('radarSettingsMeta');
     radarSettingsContentEl = document.getElementById('radarSettingsContent');
+
+    radarPaletteFileInputEl = document.createElement('input');
+    radarPaletteFileInputEl.type = 'file';
+    radarPaletteFileInputEl.accept = '.pal';
+    radarPaletteFileInputEl.style.display = 'none';
+    radarPaletteFileInputEl.addEventListener('change', handleRadarPaletteFileSelection);
+    document.body.appendChild(radarPaletteFileInputEl);
 
     const stopRadarUiPropagation = function(event) { event.stopPropagation(); };
     radarDrawerRootEl.addEventListener('keydown', stopRadarUiPropagation);
@@ -6316,6 +7227,8 @@ var soundingGraph = {
   const precipPhaseAccumShader = await loadShader('precipPhaseAccum.frag');
   const rhohvFieldShader = await loadShader('rhohvFieldShader.frag');
   const rhohvDisplayShader = await loadShader('rhohvDisplayShader.frag');
+  const zdrFieldShader = await loadShader('zdrFieldShader.frag');
+  const zdrDisplayShader = await loadShader('zdrDisplayShader.frag');
   const universalDisplayShader = await loadShader('universalDisplayShader.frag');
   const skyBackgroundDisplayShader = await loadShader('skyBackgroundDisplayShader.frag');
   const realisticDisplayShader = await loadShader('realisticDisplayShader.frag');
@@ -6347,6 +7260,8 @@ var soundingGraph = {
   const precipPhaseAccumProgram = createProgram(precipPhaseAccumVertexShader, precipPhaseAccumShader);
   const rhohvFieldProgram = createProgram(simVertexShader, rhohvFieldShader);
   const rhohvDisplayProgram = createProgram(dispVertexShader, rhohvDisplayShader);
+  const zdrFieldProgram = createProgram(simVertexShader, zdrFieldShader);
+  const zdrDisplayProgram = createProgram(dispVertexShader, zdrDisplayShader);
   const universalDisplayProgram = createProgram(dispVertexShader, universalDisplayShader);
   skyBackgroundDisplayProgram = createProgram(realDispVertexShader, skyBackgroundDisplayShader);
   realisticDisplayProgram = createProgram(realDispVertexShader, realisticDisplayShader);
@@ -6697,6 +7612,7 @@ var soundingGraph = {
         console.log('Compactness:', compactness);
         console.log('Zh:', radarMetrics.zh);
         console.log('Zv:', radarMetrics.zv);
+        console.log('ZDR:', radarMetrics.zdrDb);
         console.log('HV:', radarMetrics.hv);
         console.log('rho_i:', radarMetrics.rhoParticle);
         console.log('Type:', radarMetrics.dominantType);
@@ -6813,6 +7729,7 @@ var soundingGraph = {
   const radarMomentsTexture = gl.createTexture();    // Zh, Zv, HV, count
   const radarMomentsSnapshotTex = gl.createTexture();
   const rhohvSnapshotTex = gl.createTexture();
+  const zdrSnapshotTex = gl.createTexture();
   const radarFieldTexture_0 = gl.createTexture();    // smoothed radar field
   const radarFieldTexture_1 = gl.createTexture();    // smoothed radar field
   const hailShaftTexture_0 = gl.createTexture();      // smoothed hail signal for realistic precipitation tint
@@ -6839,6 +7756,7 @@ var soundingGraph = {
   const A380GearTexture = gl.createTexture();
   const surfaceTextureMap = gl.createTexture();
   const colorScalesTexture = gl.createTexture();
+  radarPaletteTexture = gl.createTexture();
 
   const lightningTextures = [];
   const numLightningTextures = 10;
@@ -6854,6 +7772,7 @@ var soundingGraph = {
   const lightFrameBuff_1 = gl.createFramebuffer();
   reflectivitySnapshotFBO = gl.createFramebuffer();
   const rhohvSnapshotFBO = gl.createFramebuffer();
+  const zdrSnapshotFBO = gl.createFramebuffer();
   const phaseFrameBuff = gl.createFramebuffer();
   const phaseSnapshotFBO = gl.createFramebuffer();
   const radarFieldFrameBuff_0 = gl.createFramebuffer();
@@ -6945,6 +7864,11 @@ var soundingGraph = {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 
+    gl.bindTexture(gl.TEXTURE_2D, zdrSnapshotTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
     gl.bindTexture(gl.TEXTURE_2D, radarFieldTexture_0);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
@@ -7015,6 +7939,25 @@ var soundingGraph = {
     gl.bindTexture(gl.TEXTURE_2D, wallTexture_1);
     gl.bindVertexArray(fluidVao);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, zdrSnapshotFBO);
+    gl.viewport(0, 0, sim_res_x, sim_res_y);
+    gl.drawBuffers([ gl.COLOR_ATTACHMENT0 ]);
+    gl.disable(gl.BLEND);
+    gl.useProgram(zdrFieldProgram);
+    gl.uniform1f(gl.getUniformLocation(zdrFieldProgram, 'fillRadius'), Math.max(0.0, Math.round(guiControls.zdrFillRadius)));
+    gl.uniform1f(gl.getUniformLocation(zdrFieldProgram, 'supportDbzMin'), guiControls.zdrMaskDbz);
+    gl.uniform1f(gl.getUniformLocation(zdrFieldProgram, 'reflMult'), guiControls.reflectivityGain);
+    gl.uniform1f(gl.getUniformLocation(zdrFieldProgram, 'reflBoost'), guiControls.reflectivityBoost);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, radarMomentsSnapshotTex);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, reflectivitySnapshotTex);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, wallTexture_1);
+    gl.bindVertexArray(fluidVao);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
     lastReflectivitySnapshotTime = now;
     radarRefreshNoiseTick += 1.0;
     radarNeedsMeasure = true; // trigger radar updates after new snapshot
@@ -7039,6 +7982,9 @@ var soundingGraph = {
 
   gl.bindFramebuffer(gl.FRAMEBUFFER, rhohvSnapshotFBO);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, rhohvSnapshotTex, 0);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, zdrSnapshotFBO);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, zdrSnapshotTex, 0);
 
   gl.bindFramebuffer(gl.FRAMEBUFFER, phaseFrameBuff);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, phaseTexture, 0);
@@ -7214,6 +8160,8 @@ var soundingGraph = {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);        // horizontal
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); // vertical
+
+  updateRadarPaletteTexture();
 
 
   function downloadImageData(imgData)
@@ -7421,10 +8369,26 @@ var soundingGraph = {
   gl.uniform2f(gl.getUniformLocation(rhohvDisplayProgram, 'resolution'), sim_res_x, sim_res_y);
   gl.uniform2f(gl.getUniformLocation(rhohvDisplayProgram, 'texelSize'), texelSizeX, texelSizeY);
   gl.uniform1i(gl.getUniformLocation(rhohvDisplayProgram, 'rhohvTex'), 4);
+  gl.uniform1i(gl.getUniformLocation(rhohvDisplayProgram, 'radarPaletteTex'), RADAR_PALETTE_TEXTURE_UNIT);
   gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'binSize'), Math.max(1.0, Math.round(guiControls.rhohvPixelSize)));
   gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'radarRefreshTick'), radarRefreshNoiseTick);
   gl.uniform1i(gl.getUniformLocation(rhohvDisplayProgram, 'showLowCCArtifacts'), guiControls.rhohvLowCCArtifacts ? 1 : 0);
   gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'clutterDensity'), guiControls.rhohvClutterDensity);
+
+  gl.useProgram(zdrFieldProgram);
+  gl.uniform2f(gl.getUniformLocation(zdrFieldProgram, 'resolution'), sim_res_x, sim_res_y);
+  gl.uniform2f(gl.getUniformLocation(zdrFieldProgram, 'texelSize'), texelSizeX, texelSizeY);
+  gl.uniform1i(gl.getUniformLocation(zdrFieldProgram, 'radarMomentsTex'), 0);
+  gl.uniform1i(gl.getUniformLocation(zdrFieldProgram, 'reflectivityTex'), 1);
+  gl.uniform1i(gl.getUniformLocation(zdrFieldProgram, 'wallTex'), 2);
+  gl.uniform1f(gl.getUniformLocation(zdrFieldProgram, 'dryLapse'), dryLapse);
+
+  gl.useProgram(zdrDisplayProgram);
+  gl.uniform2f(gl.getUniformLocation(zdrDisplayProgram, 'resolution'), sim_res_x, sim_res_y);
+  gl.uniform2f(gl.getUniformLocation(zdrDisplayProgram, 'texelSize'), texelSizeX, texelSizeY);
+  gl.uniform1i(gl.getUniformLocation(zdrDisplayProgram, 'zdrTex'), 4);
+  gl.uniform1i(gl.getUniformLocation(zdrDisplayProgram, 'radarPaletteTex'), RADAR_PALETTE_TEXTURE_UNIT);
+  gl.uniform1f(gl.getUniformLocation(zdrDisplayProgram, 'radarRefreshTick'), radarRefreshNoiseTick);
 
   gl.useProgram(radarFieldUpdateProgram);
   gl.uniform2f(gl.getUniformLocation(radarFieldUpdateProgram, 'resolution'), sim_res_x, sim_res_y);
@@ -7454,6 +8418,7 @@ var soundingGraph = {
   gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'phaseTex'), 5);
   gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'phaseStatsTex'), 6);
   gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'radarMomentsTex'), 7);
+  gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'radarPaletteTex'), RADAR_PALETTE_TEXTURE_UNIT);
 
   gl.useProgram(realisticDisplayProgram);
   gl.uniform2f(gl.getUniformLocation(realisticDisplayProgram, 'resolution'), sim_res_x, sim_res_y);
@@ -8013,12 +8978,14 @@ var soundingGraph = {
       ctx.fillText('Zh: ' + radarMetrics.zh.toExponential(1), 0, 84);
       ctx.fillStyle = '#FFCC00';
       ctx.fillText('Zv: ' + radarMetrics.zv.toExponential(1), 0, 98);
+      ctx.fillStyle = '#FFAA66';
+      ctx.fillText('ZDR: ' + radarMetrics.zdrDb.toFixed(2) + ' dB', 0, 112);
       ctx.fillStyle = '#FF66CC';
-      ctx.fillText('HV: ' + radarMetrics.hv.toExponential(1), 0, 112);
+      ctx.fillText('HV: ' + radarMetrics.hv.toExponential(1), 0, 126);
       ctx.fillStyle = '#FF99FF';
-      ctx.fillText('rho_i: ' + radarMetrics.rhoParticle.toFixed(3), 0, 126);
+      ctx.fillText('rho_i: ' + radarMetrics.rhoParticle.toFixed(3), 0, 140);
       ctx.fillStyle = '#E8E8E8';
-      ctx.fillText('Type: ' + radarMetrics.dominantType, 0, 140);
+      ctx.fillText('Type: ' + radarMetrics.dominantType, 0, 154);
     }
 
     if (airplaneMode) {
@@ -8032,8 +8999,8 @@ var soundingGraph = {
       refreshReflectivitySnapshot(nowMs);
     }
 
-    // Reflectivity debug readout
-    if ((guiControls.displayMode == 'DISP_REFLECTIVITY' || guiControls.displayMode == 'DISP_RHOHV') && getRadarProductDebugEnabled(guiControls.displayMode)) {
+    // Radar product debug readout
+    if (getRadarProductIdForDisplayMode(guiControls.displayMode) && getRadarProductDebugEnabled(guiControls.displayMode)) {
       var simXposDbg = Math.floor(Math.abs(mod(mouseXinSim * sim_res_x, sim_res_x)));
       var simYposDbg = Math.min(Math.max(Math.floor(mouseYinSim * sim_res_y), 0), sim_res_y - 1);
 
@@ -8043,8 +9010,8 @@ var soundingGraph = {
         gl.readBuffer(gl.COLOR_ATTACHMENT0); // reflectivitySnapshotTex
         gl.readPixels(simXposDbg, simYposDbg, 1, 1, gl.RGBA, gl.FLOAT, radarDbg);
       } else {
-        gl.bindFramebuffer(gl.FRAMEBUFFER, rhohvSnapshotFBO);
-        gl.readBuffer(gl.COLOR_ATTACHMENT0); // rhohvSnapshotTex
+        gl.bindFramebuffer(gl.FRAMEBUFFER, guiControls.displayMode == 'DISP_RHOHV' ? rhohvSnapshotFBO : zdrSnapshotFBO);
+        gl.readBuffer(gl.COLOR_ATTACHMENT0);
         gl.readPixels(simXposDbg, simYposDbg, 1, 1, gl.RGBA, gl.FLOAT, radarDbg);
       }
 
@@ -8056,15 +9023,17 @@ var soundingGraph = {
         var z_raw_dbg = Math.sqrt(zhDbg) * guiControls.reflectivityGain + zhDbg * guiControls.reflectivityBoost;
         var dBZ_dbg = 10.0 * Math.log10(z_raw_dbg + 1e-6);
         reflectivityDbgEl.textContent = 'dBZ*: ' + dBZ_dbg.toFixed(1);
+      } else if (guiControls.displayMode == 'DISP_RHOHV') {
+        reflectivityDbgEl.textContent = 'rhohv: ' + radarDbg[0].toFixed(3);
       } else {
-        reflectivityDbgEl.textContent = 'ρhv: ' + radarDbg[0].toFixed(3);
+        reflectivityDbgEl.textContent = radarDbg[3] > 0.0 ? ('ZDR: ' + radarDbg[0].toFixed(2) + ' dB') : 'ZDR: --';
       }
     } else if (reflectivityDbgEl) {
       reflectivityDbgEl.style.display = 'none';
     }
 
     // render to canvas
-    const isRadarProductMode = guiControls.displayMode == 'DISP_REFLECTIVITY' || guiControls.displayMode == 'DISP_RHOHV';
+    const isRadarProductMode = !!getRadarProductIdForDisplayMode(guiControls.displayMode);
     const overlayRadarProduct = isRadarProductMode && !getRadarProductBackground(guiControls.displayMode);
     const displayModeEffective = overlayRadarProduct ? 'DISP_REAL' : guiControls.displayMode;
 
@@ -8331,6 +9300,8 @@ var soundingGraph = {
     } else {
       gl.activeTexture(gl.TEXTURE9);
       gl.bindTexture(gl.TEXTURE_2D, colorScalesTexture);
+      gl.activeTexture(gl.TEXTURE0 + RADAR_PALETTE_TEXTURE_UNIT);
+      gl.bindTexture(gl.TEXTURE_2D, radarPaletteTexture);
 
       if (displayModeEffective == 'DISP_PARTICLE_SIZE') {
         gl.clearColor(0.035, 0.05, 0.08, 1.0);
@@ -8394,6 +9365,7 @@ var soundingGraph = {
         gl.uniform3f(gl.getUniformLocation(rhohvDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
         gl.uniform4f(gl.getUniformLocation(rhohvDisplayProgram, 'cursor'), mouseXinSim, mouseYinSim, guiControls.brushSize * 0.5, cursorType);
         gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'Xmult'), horizontalDisplayMult);
+        applyRadarPaletteUniforms(rhohvDisplayProgram, RADAR_PRODUCT_RHOHV);
         gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'binSize'), Math.max(1.0, Math.round(guiControls.rhohvPixelSize)));
         gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'radarRefreshTick'), radarRefreshNoiseTick);
         gl.uniform1i(gl.getUniformLocation(rhohvDisplayProgram, 'showLowCCArtifacts'), guiControls.rhohvLowCCArtifacts ? 1 : 0);
@@ -8403,6 +9375,23 @@ var soundingGraph = {
         gl.activeTexture(gl.TEXTURE4);
         gl.bindTexture(gl.TEXTURE_2D, rhohvSnapshotTex);
         if (!guiControls.rhohvBackground) {
+          gl.enable(gl.BLEND);
+          gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        }
+      } else if (displayModeEffective == 'DISP_ZDR') {
+        gl.useProgram(zdrDisplayProgram);
+        gl.uniform2f(gl.getUniformLocation(zdrDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
+        gl.uniform3f(gl.getUniformLocation(zdrDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
+        gl.uniform4f(gl.getUniformLocation(zdrDisplayProgram, 'cursor'), mouseXinSim, mouseYinSim, guiControls.brushSize * 0.5, cursorType);
+        gl.uniform1f(gl.getUniformLocation(zdrDisplayProgram, 'Xmult'), horizontalDisplayMult);
+        applyRadarPaletteUniforms(zdrDisplayProgram, RADAR_PRODUCT_ZDR);
+        gl.uniform1f(gl.getUniformLocation(zdrDisplayProgram, 'binSize'), Math.max(1.0, Math.round(guiControls.zdrPixelSize)));
+        gl.uniform1f(gl.getUniformLocation(zdrDisplayProgram, 'radarRefreshTick'), radarRefreshNoiseTick);
+        gl.uniform1f(gl.getUniformLocation(zdrDisplayProgram, 'productAlpha'), 0.76);
+        gl.uniform1i(gl.getUniformLocation(zdrDisplayProgram, 'productOpaque'), guiControls.zdrBackground ? 1 : 0);
+        gl.activeTexture(gl.TEXTURE4);
+        gl.bindTexture(gl.TEXTURE_2D, zdrSnapshotTex);
+        if (!guiControls.zdrBackground) {
           gl.enable(gl.BLEND);
           gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
         }
@@ -8451,6 +9440,7 @@ var soundingGraph = {
         gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'dispMultiplier'), 1.0);
         gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'reflectivityMode'), 1);
         gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'radarProduct'), 0);
+        applyRadarPaletteUniforms(universalDisplayProgram, RADAR_PRODUCT_REFLECTIVITY);
         gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflMult'), guiControls.reflectivityGain); // user gain
         gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflBoost'), guiControls.reflectivityBoost);
         gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflPixelSize'), guiControls.reflectivityPixelSize);
@@ -8527,6 +9517,7 @@ var soundingGraph = {
         gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'radarProduct'), 0);
         gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'quantityIndex'), 2);
         gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'dispMultiplier'), 1.0);
+        applyRadarPaletteUniforms(universalDisplayProgram, RADAR_PRODUCT_REFLECTIVITY);
 
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, waterTexture_1);
@@ -8540,12 +9531,13 @@ var soundingGraph = {
         gl.bindTexture(gl.TEXTURE_2D, radarMomentsTexture);
         gl.activeTexture(gl.TEXTURE2);
         gl.bindTexture(gl.TEXTURE_2D, wallTexture_1);
-      } else {
+      } else if (guiControls.displayMode == 'DISP_RHOHV') {
         gl.useProgram(rhohvDisplayProgram);
         gl.uniform2f(gl.getUniformLocation(rhohvDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
         gl.uniform3f(gl.getUniformLocation(rhohvDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
         gl.uniform4f(gl.getUniformLocation(rhohvDisplayProgram, 'cursor'), mouseXinSim, mouseYinSim, guiControls.brushSize * 0.5, cursorType);
         gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'Xmult'), horizontalDisplayMult);
+        applyRadarPaletteUniforms(rhohvDisplayProgram, RADAR_PRODUCT_RHOHV);
         gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'binSize'), Math.max(1.0, Math.round(guiControls.rhohvPixelSize)));
         gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'radarRefreshTick'), radarRefreshNoiseTick);
         gl.uniform1i(gl.getUniformLocation(rhohvDisplayProgram, 'showLowCCArtifacts'), guiControls.rhohvLowCCArtifacts ? 1 : 0);
@@ -8554,6 +9546,19 @@ var soundingGraph = {
         gl.uniform1i(gl.getUniformLocation(rhohvDisplayProgram, 'productOpaque'), 0);
         gl.activeTexture(gl.TEXTURE4);
         gl.bindTexture(gl.TEXTURE_2D, rhohvSnapshotTex);
+      } else {
+        gl.useProgram(zdrDisplayProgram);
+        gl.uniform2f(gl.getUniformLocation(zdrDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
+        gl.uniform3f(gl.getUniformLocation(zdrDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
+        gl.uniform4f(gl.getUniformLocation(zdrDisplayProgram, 'cursor'), mouseXinSim, mouseYinSim, guiControls.brushSize * 0.5, cursorType);
+        gl.uniform1f(gl.getUniformLocation(zdrDisplayProgram, 'Xmult'), horizontalDisplayMult);
+        applyRadarPaletteUniforms(zdrDisplayProgram, RADAR_PRODUCT_ZDR);
+        gl.uniform1f(gl.getUniformLocation(zdrDisplayProgram, 'binSize'), Math.max(1.0, Math.round(guiControls.zdrPixelSize)));
+        gl.uniform1f(gl.getUniformLocation(zdrDisplayProgram, 'radarRefreshTick'), radarRefreshNoiseTick);
+        gl.uniform1f(gl.getUniformLocation(zdrDisplayProgram, 'productAlpha'), 0.76);
+        gl.uniform1i(gl.getUniformLocation(zdrDisplayProgram, 'productOpaque'), 0);
+        gl.activeTexture(gl.TEXTURE4);
+        gl.bindTexture(gl.TEXTURE_2D, zdrSnapshotTex);
       }
 
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
