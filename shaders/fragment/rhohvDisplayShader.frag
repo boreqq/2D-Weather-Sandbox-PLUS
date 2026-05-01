@@ -9,12 +9,15 @@ in vec2 fragCoord;
 uniform vec2 resolution;
 uniform vec2 texelSize;
 uniform sampler2D rhohvTex;
+uniform sampler2D radarPaletteTex;
 uniform float productAlpha;
 uniform bool productOpaque;
 uniform float binSize;
 uniform float radarRefreshTick;
 uniform bool showLowCCArtifacts;
 uniform float clutterDensity;
+uniform vec2 radarPaletteRange;
+uniform float radarPaletteRowCenter;
 
 uniform vec3 view;   // Xpos  Ypos    Zoom
 uniform vec4 cursor; // xpos   Ypos  Size   type
@@ -31,33 +34,11 @@ float rhohvRand2(vec2 p)
   return fract(sin(mod(dt, 3.14)) * 43758.5453123);
 }
 
-vec3 rhoColor(float rho)
+vec4 sampleRadarPalette(float value)
 {
-  const int n = 12;
-  float levels[n] = float[n](1.05, 1.00, 0.99, 0.97, 0.95, 0.90, 0.85, 0.80, 0.75, 0.60, 0.45, 0.00);
-  vec3 cols[n] = vec3[n](
-    vec3(164, 54, 150) / 255.0,
-    vec3(255, 180, 215) / 255.0,
-    vec3(139, 30, 77) / 255.0,
-    vec3(225, 3, 0) / 255.0,
-    vec3(255, 140, 0) / 255.0,
-    vec3(255, 255, 0) / 255.0,
-    vec3(135, 215, 10) / 255.0,
-    vec3(95, 245, 100) / 255.0,
-    vec3(120, 120, 255) / 255.0,
-    vec3(10, 10, 190) / 255.0,
-    vec3(15, 15, 140) / 255.0,
-    vec3(15, 15, 140) / 255.0
-  );
-
-  rho = clamp(rho, levels[n - 1], levels[0]);
-  for (int i = 1; i < n; i++) {
-    if (rho >= levels[i]) {
-      float t = (rho - levels[i]) / (levels[i - 1] - levels[i]);
-      return mix(cols[i], cols[i - 1], t);
-    }
-  }
-  return cols[n - 1];
+  float paletteSpan = max(radarPaletteRange.y - radarPaletteRange.x, 1e-6);
+  float paletteU = clamp((value - radarPaletteRange.x) / paletteSpan, 0.0, 1.0);
+  return texture(radarPaletteTex, vec2(paletteU, radarPaletteRowCenter));
 }
 
 void main()
@@ -111,7 +92,8 @@ void main()
     rho = mix(0.46, 0.70, tintJitter) + (1.0 - edgeWeight) * 0.03;
     rho = clamp(rho, 0.42, 0.76);
     alpha = productOpaque ? 1.0 : productAlpha;
-    fragmentColor = vec4(rhoColor(rho), alpha);
+    vec4 paletteSample = sampleRadarPalette(rho);
+    fragmentColor = vec4(paletteSample.rgb, alpha * paletteSample.a);
     drawCursor(cursor, view);
     return;
   }
@@ -146,6 +128,7 @@ void main()
   float dynamicFine = (rhohvRand2(binCoord * 2.0 + vec2(41.2, 83.1) + vec2(timeBucket * 1.17, timeBucket * 0.71)) - 0.5) * 0.004;
   rho = clamp(rho + dynamicNoise + dynamicFine, 0.0, 1.05);
 
-  fragmentColor = vec4(rhoColor(rho), alpha);
+  vec4 paletteSample = sampleRadarPalette(rho);
+  fragmentColor = vec4(paletteSample.rgb, alpha * paletteSample.a);
   drawCursor(cursor, view);
 }

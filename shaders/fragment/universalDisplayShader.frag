@@ -14,10 +14,19 @@ uniform sampler2D snapshotTex; // cached radar moments for radar-like sweep
 uniform sampler2D phaseTex;    // cached liquid/ice split for rhohv
 uniform sampler2D phaseStatsTex; // cached density sums/sumsq/count
 uniform sampler2D radarMomentsTex; // cached Zh/Zv/sumHV/count from precipitation accumulation
+uniform sampler2D radarPaletteTex;
 uniform isampler2D wallTex;
 
 uniform int quantityIndex; // wich quantity to display
 uniform float dispMultiplier;
+uniform bool reflectivityMode;
+uniform float reflMult;
+uniform float reflBoost;
+uniform float reflPixelSize; // >=1; 1 = no pixelation
+uniform bool reflBackground; // true = opaque overwrite, false = overlay (alpha honored)
+uniform int radarProduct; // 0 reflectivity, 1 rhohv
+uniform vec2 radarPaletteRange;
+uniform float radarPaletteRowCenter;
 
 uniform vec3 view;   // Xpos  Ypos    Zoom
 uniform vec4 cursor; // xpos   Ypos  Size   type
@@ -25,6 +34,13 @@ uniform vec4 cursor; // xpos   Ypos  Size   type
 out vec4 fragmentColor;
 
 #include "commonDisplay.glsl"
+
+vec4 sampleRadarPalette(float value)
+{
+  float paletteSpan = max(radarPaletteRange.y - radarPaletteRange.x, 1e-6);
+  float paletteU = clamp((value - radarPaletteRange.x) / paletteSpan, 0.0, 1.0);
+  return texture(radarPaletteTex, vec2(paletteU, radarPaletteRowCenter));
+}
 
 void main()
 {
@@ -72,7 +88,8 @@ void main()
     alpha *= echoMask;
 
     if (radarProduct == 0) {
-      fragmentColor = vec4(radarColor(dBZ), alpha);
+      vec4 paletteSample = sampleRadarPalette(dBZ);
+      fragmentColor = vec4(paletteSample.rgb, alpha * paletteSample.a);
     } else {
       vec4 phase = texture(phaseTex, sampleCoord);
       vec4 stats = texture(phaseStatsTex, sampleCoord);
@@ -86,7 +103,8 @@ void main()
       float phaseMix = ice / max(liquid + ice, 1e-6);
       // ignore sparse/noisy bins or very weak echoes
       if (zhLinear < 1e-6 || count < 3.0 || dBZ < 20.0) {
-        fragmentColor = vec4(rhoColor(1.0), alpha);
+        vec4 paletteSample = sampleRadarPalette(1.0);
+        fragmentColor = vec4(paletteSample.rgb, alpha * paletteSample.a);
         return;
       }
 
@@ -112,9 +130,9 @@ void main()
       rho = mix(rho, pow(rho, 0.91), 0.10);
       rho = clamp(rho, 0.6, 1.05);
 
-      // RGB colormap by rho uses user palette (rhoColor), alpha for smooth transition
       float rhoAlpha = clamp(alpha + 0.15, 0.35, 0.9);
-      fragmentColor = vec4(rhoColor(rho), rhoAlpha);
+      vec4 paletteSample = sampleRadarPalette(rho);
+      fragmentColor = vec4(paletteSample.rgb, rhoAlpha * paletteSample.a);
     }
   } else if (val > 0.0) {
     fragmentColor = vec4(1.0, 1.0 - val, 1.0 - val, 1.0);
