@@ -24,7 +24,9 @@
         body {
             margin: 0;
             font-family: 'Arial', sans-serif;
-            background: url('resources/img/background.png') bottom left no-repeat;
+            background:
+                linear-gradient(180deg, rgba(4, 7, 14, 0.72), rgba(4, 7, 14, 0.56)),
+                url('resources/img/background-plus.png') bottom left no-repeat;
             background-size: cover;
             background-attachment: fixed;
             color: var(--text-color);
@@ -42,9 +44,8 @@
             justify-content: space-between;
             align-items: center;
             padding: 0rem 2rem 0rem 2rem;
-            background: rgba(0, 0, 0, 0.13);
-            backdrop-filter: blur(10px);
-            z-index: 0;
+            background: rgba(6, 10, 18, 0.78);
+            z-index: 20;
             box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
         }
 
@@ -92,10 +93,17 @@
         }
 
         #IntroScreen {
+            position: relative;
             padding: 20px;
             max-width: 1200px;
             margin: 20px;
+            background: rgba(8, 12, 22, 0.38);
+            border: 1px solid rgba(255, 255, 255, 0.08);
             border-radius: var(--border-radius);
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
+            z-index: 1;
+            box-shadow: 0 18px 45px rgba(0, 0, 0, 0.28);
             animation: fadeIn 1s ease-in-out;
         }
 
