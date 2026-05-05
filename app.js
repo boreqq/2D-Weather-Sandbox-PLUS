@@ -2573,6 +2573,7 @@ class LoadingBar
 function setLoadingBar()
 {
   return new Promise((resolve) => {
+    document.body.classList.add('game-active');
     var element = document.getElementById('IntroScreen');
     element.parentNode.removeChild(element); // remove introscreen div
 
