@@ -353,6 +353,8 @@ const RADAR_PRODUCT_RHOHV = 'RADAR_RHOHV';
 const RADAR_PRODUCT_ZDR = 'RADAR_ZDR';
 const RADAR_PRODUCT_KDP = 'RADAR_KDP';
 const RADAR_PRODUCT_RADIAL_VELOCITY = 'RADAR_RADIAL_VELOCITY';
+const RADAR_PANEL_MODE_COMPOSITE = 'RADAR_PANEL_MODE_COMPOSITE';
+const RADAR_PANEL_MODE_SINGLE_STATION = 'RADAR_PANEL_MODE_SINGLE_STATION';
 
 const RADAR_PRODUCTS = Object.freeze([
   {
@@ -395,6 +397,19 @@ const RADAR_PRODUCTS = Object.freeze([
     isImplemented : false,
     displayMode : null,
   },
+]);
+
+const RADAR_STATION_PLACEHOLDERS = Object.freeze([
+  { id : 'ST_BRZ', code : 'BRZ', name : 'Brzuchania' },
+  { id : 'ST_GDY', code : 'GDY', name : 'Gdynia' },
+  { id : 'ST_GSA', code : 'GSA', name : 'Gora Swietej Anny' },
+  { id : 'ST_LEG', code : 'LEG', name : 'Legionowo' },
+  { id : 'ST_PAS', code : 'PAS', name : 'Pastewnik' },
+  { id : 'ST_POZ', code : 'POZ', name : 'Poznan' },
+  { id : 'ST_RAM', code : 'RAM', name : 'Ramza' },
+  { id : 'ST_RZE', code : 'RZE', name : 'Rzeszow' },
+  { id : 'ST_SWI', code : 'SWI', name : 'Sliwin' },
+  { id : 'ST_UZR', code : 'UZR', name : 'Uzranki' },
 ]);
 
 const RADAR_PRODUCTS_BY_ID = Object.freeze(
@@ -5282,10 +5297,17 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   var radarDrawerRootEl = null;
   var radarDrawerLauncherEl = null;
-  var radarDrawerLauncherArrowEl = null;
   var radarDrawerLauncherLabelEl = null;
+  var radarDrawerLauncherStationBadgeEl = null;
+  var radarDrawerBackEl = null;
+  var radarDrawerCloseEl = null;
+  var radarDrawerLocationEl = null;
   var radarDrawerPanelEl = null;
+  var radarPanelCompositeTabEl = null;
+  var radarPanelSingleStationTabEl = null;
   var radarProductListEl = null;
+  var radarStationListEl = null;
+  var radarStationSummaryEl = null;
   var radarSettingsSheetEl = null;
   var radarSettingsToggleEl = null;
   var radarSettingsArrowEl = null;
@@ -5295,10 +5317,37 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   var radarSettingsContentEl = null;
   var radarDrawerOpen = false;
   var radarSettingsOpen = false;
+  var radarPanelMode = RADAR_PANEL_MODE_SINGLE_STATION;
+  var selectedRadarStationPlaceholderId = 'ST_RZE';
 
   function formatRadarUiNumber(value, digits = 2)
   {
     return Number(value).toFixed(digits).replace(/\.?0+$/, '');
+  }
+
+  function getVisibleRadarProductsForPanelMode()
+  {
+    if (radarPanelMode == RADAR_PANEL_MODE_COMPOSITE)
+      return RADAR_PRODUCTS.filter((product) => product.id == RADAR_PRODUCT_REFLECTIVITY);
+    return RADAR_PRODUCTS;
+  }
+
+  function getSelectedRadarPlaceholderStation()
+  {
+    return RADAR_STATION_PLACEHOLDERS.find((station) => station.id == selectedRadarStationPlaceholderId) || RADAR_STATION_PLACEHOLDERS[0];
+  }
+
+  function setRadarPanelMode(nextMode)
+  {
+    const mode = nextMode == RADAR_PANEL_MODE_SINGLE_STATION ? RADAR_PANEL_MODE_SINGLE_STATION : RADAR_PANEL_MODE_COMPOSITE;
+    radarPanelMode = mode;
+
+    if (mode == RADAR_PANEL_MODE_COMPOSITE && guiControls.selectedRadarProduct != RADAR_PRODUCT_REFLECTIVITY) {
+      setSelectedRadarProduct(RADAR_PRODUCT_REFLECTIVITY, {activateIfImplemented : true});
+      return;
+    }
+
+    handleRadarUiExternalChange();
   }
 
   function updateRadarPanelShell()
@@ -5311,10 +5360,24 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     radarDrawerRootEl.classList.toggle('has-settings-open', radarSettingsOpen);
     radarDrawerLauncherEl.setAttribute('aria-expanded', radarDrawerOpen ? 'true' : 'false');
     radarDrawerPanelEl.setAttribute('aria-hidden', radarDrawerOpen ? 'false' : 'true');
-    if (radarDrawerLauncherArrowEl)
-      radarDrawerLauncherArrowEl.textContent = radarDrawerOpen ? '▴' : '▾';
     if (radarDrawerLauncherLabelEl)
-      radarDrawerLauncherLabelEl.textContent = 'Radar / ' + selectedRadarProduct.launcherLabel;
+      radarDrawerLauncherLabelEl.textContent = selectedRadarProduct.launcherLabel;
+    if (radarDrawerLauncherStationBadgeEl) {
+      radarDrawerLauncherStationBadgeEl.textContent = 'RADAR';
+      radarDrawerLauncherStationBadgeEl.classList.toggle('is-hidden', radarPanelMode == RADAR_PANEL_MODE_COMPOSITE);
+    }
+    if (radarDrawerLocationEl)
+      radarDrawerLocationEl.textContent = radarPanelMode == RADAR_PANEL_MODE_COMPOSITE ? 'Composite (Poland)' : 'Single Radar (Poland)';
+    if (radarPanelCompositeTabEl) {
+      const compositeTabSelected = radarPanelMode == RADAR_PANEL_MODE_COMPOSITE;
+      radarPanelCompositeTabEl.classList.toggle('is-active', compositeTabSelected);
+      radarPanelCompositeTabEl.setAttribute('aria-selected', compositeTabSelected ? 'true' : 'false');
+    }
+    if (radarPanelSingleStationTabEl) {
+      const singleStationTabSelected = radarPanelMode == RADAR_PANEL_MODE_SINGLE_STATION;
+      radarPanelSingleStationTabEl.classList.toggle('is-active', singleStationTabSelected);
+      radarPanelSingleStationTabEl.setAttribute('aria-selected', singleStationTabSelected ? 'true' : 'false');
+    }
     if (radarSettingsToggleEl)
       radarSettingsToggleEl.setAttribute('aria-expanded', radarSettingsOpen ? 'true' : 'false');
     if (radarSettingsArrowEl)
@@ -5329,6 +5392,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     updateRadarPanelShell();
     if (radarDrawerOpen) {
       renderRadarProductList();
+      renderRadarStationList();
       renderRadarSettings();
     }
     if (radarDisplayModeController)
@@ -5639,7 +5703,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     radarProductListEl.replaceChildren();
 
-    for (const product of RADAR_PRODUCTS) {
+    for (const product of getVisibleRadarProductsForPanelMode()) {
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'radar-product-card';
@@ -5666,19 +5730,41 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
       button.appendChild(copy);
 
-      if (!product.isImplemented) {
-        const badge = document.createElement('span');
-        badge.className = 'radar-product-card__badge';
-        badge.textContent = 'Soon';
-        button.appendChild(badge);
-      }
-
       button.addEventListener('click', function() {
         setSelectedRadarProduct(product.id, {activateIfImplemented : true});
       });
 
       radarProductListEl.appendChild(button);
     }
+  }
+
+  function renderRadarStationList()
+  {
+    if (!radarStationListEl)
+      return;
+
+    radarStationListEl.replaceChildren();
+    if (radarStationSummaryEl)
+      radarStationSummaryEl.textContent = 'No deployed radars';
+
+    const emptyCard = document.createElement('div');
+    emptyCard.className = 'radar-station-card is-muted';
+
+    const copy = document.createElement('div');
+    copy.className = 'radar-product-card__copy';
+
+    const label = document.createElement('span');
+    label.className = 'radar-product-card__label';
+    label.textContent = 'No stations';
+    copy.appendChild(label);
+
+    const description = document.createElement('span');
+    description.className = 'radar-product-card__description';
+    description.textContent = 'Deploy radar towers to populate this list.';
+    copy.appendChild(description);
+
+    emptyCard.appendChild(copy);
+    radarStationListEl.appendChild(emptyCard);
   }
 
   function renderRadarSettings()
@@ -5695,23 +5781,23 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
       const badge = document.createElement('span');
       badge.className = 'radar-empty-state__badge';
-      badge.textContent = 'Wkrotce';
+      badge.textContent = 'Soon';
       stateEl.appendChild(badge);
 
       const title = document.createElement('div');
       title.className = 'radar-empty-state__title';
-      title.textContent = 'Produkt niedostepny w tej wersji';
+      title.textContent = 'Product unavailable in this version';
       stateEl.appendChild(title);
 
       const message = document.createElement('div');
       message.className = 'radar-empty-state__text';
-      message.textContent = 'Ten produkt jest zaplanowany, ale nie jest jeszcze renderowany w tej wersji.';
+      message.textContent = 'This product is planned, but not rendered in this version yet.';
       stateEl.appendChild(message);
 
       const fallbackProduct = getRadarProductMeta(guiControls.lastLiveRadarProduct);
       const shortcutHint = document.createElement('div');
       shortcutHint.className = 'radar-empty-state__hint';
-      shortcutHint.textContent = 'Klawisz 0 wlaczy: ' + fallbackProduct.label;
+      shortcutHint.textContent = 'Key 0 switches to: ' + fallbackProduct.label;
       stateEl.appendChild(shortcutHint);
 
       radarSettingsContentEl.appendChild(stateEl);
@@ -5890,20 +5976,35 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     container.innerHTML = `
       <div id="radarDrawer" class="radar-drawer">
         <button id="radarDrawerLauncher" class="radar-drawer__launcher" type="button" aria-label="Toggle radar panel" aria-controls="radarDrawerPanel" aria-expanded="false">
-          <span class="radar-drawer__launcher-icon" aria-hidden="true">
-            <span id="radarDrawerLauncherArrow" class="radar-drawer__launcher-arrow">▾</span>
-          </span>
-          <span id="radarDrawerLauncherLabel" class="radar-drawer__launcher-label">Radar / REF</span>
+          <span class="radar-drawer__launcher-icon" aria-hidden="true"></span>
+          <span id="radarDrawerLauncherLabel" class="radar-drawer__launcher-label">pvol</span>
+          <span id="radarDrawerLauncherStationBadge" class="radar-drawer__launcher-station-badge">RZE</span>
         </button>
         <section id="radarDrawerPanel" class="radar-drawer__panel" aria-hidden="true">
           <div class="radar-drawer__header">
-            <div>
-              <div class="radar-drawer__eyebrow">Radar</div>
-              <h3 class="radar-drawer__title">Products</h3>
+            <button id="radarDrawerBack" class="radar-drawer__navbtn" type="button" aria-label="Back">‹</button>
+            <div class="radar-drawer__location">
+              <span class="radar-drawer__flag" aria-hidden="true">🇵🇱</span>
+              <span id="radarDrawerLocationLabel" class="radar-drawer__location-label">Single Radar (Poland)</span>
             </div>
-            <div class="radar-drawer__hint">0 = selected view</div>
+            <button id="radarDrawerClose" class="radar-drawer__navbtn" type="button" aria-label="Close">×</button>
           </div>
-          <div id="radarProductList" class="radar-product-list"></div>
+          <div class="radar-panel-tabs" role="tablist" aria-label="Radar mode">
+            <button id="radarTabComposite" class="radar-panel-tab" type="button" role="tab" aria-selected="false">Composite</button>
+            <button id="radarTabSingleStation" class="radar-panel-tab is-active" type="button" role="tab" aria-selected="true">Single station</button>
+          </div>
+          <div class="radar-panel-subtitle">Radar products and stations</div>
+          <div class="radar-panel-columns">
+            <section class="radar-panel-column radar-panel-column--products" aria-label="Radar products">
+              <div class="radar-panel-column__title">Products</div>
+              <div id="radarProductList" class="radar-product-list"></div>
+            </section>
+            <section class="radar-panel-column radar-panel-column--stations" aria-label="Radar stations">
+              <div class="radar-panel-column__title">Radar stations</div>
+              <div id="radarStationSummary" class="radar-panel-column__meta">No deployed radars</div>
+              <div id="radarStationList" class="radar-station-list"></div>
+            </section>
+          </div>
           <div id="radarSettingsSheet" class="radar-settings-sheet">
             <button id="radarSettingsToggle" class="radar-settings-sheet__tab" type="button" aria-expanded="false" aria-controls="radarSettingsBody">
               <div class="radar-settings-sheet__copy">
@@ -5925,10 +6026,17 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     document.body.appendChild(radarDrawerRootEl);
 
     radarDrawerLauncherEl = document.getElementById('radarDrawerLauncher');
-    radarDrawerLauncherArrowEl = document.getElementById('radarDrawerLauncherArrow');
     radarDrawerLauncherLabelEl = document.getElementById('radarDrawerLauncherLabel');
+    radarDrawerLauncherStationBadgeEl = document.getElementById('radarDrawerLauncherStationBadge');
+    radarDrawerBackEl = document.getElementById('radarDrawerBack');
+    radarDrawerCloseEl = document.getElementById('radarDrawerClose');
+    radarDrawerLocationEl = document.getElementById('radarDrawerLocationLabel');
     radarDrawerPanelEl = document.getElementById('radarDrawerPanel');
+    radarPanelCompositeTabEl = document.getElementById('radarTabComposite');
+    radarPanelSingleStationTabEl = document.getElementById('radarTabSingleStation');
     radarProductListEl = document.getElementById('radarProductList');
+    radarStationListEl = document.getElementById('radarStationList');
+    radarStationSummaryEl = document.getElementById('radarStationSummary');
     radarSettingsSheetEl = document.getElementById('radarSettingsSheet');
     radarSettingsToggleEl = document.getElementById('radarSettingsToggle');
     radarSettingsArrowEl = document.getElementById('radarSettingsArrow');
@@ -5952,6 +6060,26 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     radarDrawerLauncherEl.addEventListener('click', function(event) {
       event.stopPropagation();
       toggleRadarPanel();
+    });
+
+    radarDrawerBackEl.addEventListener('click', function(event) {
+      event.stopPropagation();
+      toggleRadarPanel(false);
+    });
+
+    radarDrawerCloseEl.addEventListener('click', function(event) {
+      event.stopPropagation();
+      toggleRadarPanel(false);
+    });
+
+    radarPanelCompositeTabEl.addEventListener('click', function(event) {
+      event.stopPropagation();
+      setRadarPanelMode(RADAR_PANEL_MODE_COMPOSITE);
+    });
+
+    radarPanelSingleStationTabEl.addEventListener('click', function(event) {
+      event.stopPropagation();
+      setRadarPanelMode(RADAR_PANEL_MODE_SINGLE_STATION);
     });
 
     radarSettingsToggleEl.addEventListener('click', function(event) {
@@ -5979,6 +6107,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     if (radarDrawerOpen) {
       renderRadarProductList();
+      renderRadarStationList();
       renderRadarSettings();
     }
   }
@@ -6001,10 +6130,13 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   function setSelectedRadarProduct(productId, options = {})
   {
     const product = getRadarProductMeta(productId);
-    guiControls.selectedRadarProduct = product.id;
+    if (radarPanelMode == RADAR_PANEL_MODE_COMPOSITE && product.id != RADAR_PRODUCT_REFLECTIVITY)
+      guiControls.selectedRadarProduct = RADAR_PRODUCT_REFLECTIVITY;
+    else
+      guiControls.selectedRadarProduct = product.id;
 
     if (options.activateIfImplemented && product.isImplemented) {
-      activateRadarProduct(product.id);
+      activateRadarProduct(guiControls.selectedRadarProduct);
       return;
     }
 
@@ -6012,6 +6144,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     updateRadarPanelShell();
     if (radarDrawerOpen) {
       renderRadarProductList();
+      renderRadarStationList();
       renderRadarSettings();
     }
   }
@@ -9899,4 +10032,3 @@ var soundingGraph = {
     }
   }
 } // end of mainscript
-
