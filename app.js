@@ -360,7 +360,7 @@ const RADAR_PRODUCTS = Object.freeze([
   {
     id : RADAR_PRODUCT_REFLECTIVITY,
     label : 'reflectivity',
-    launcherLabel : 'reflectivity',
+    launcherLabel : 'ref',
     shortDescription : 'Base reflectivity (dBZ)',
     isImplemented : true,
     displayMode : 'DISP_REFLECTIVITY',
@@ -391,25 +391,12 @@ const RADAR_PRODUCTS = Object.freeze([
   },
   {
     id : RADAR_PRODUCT_RADIAL_VELOCITY,
-    label : 'radial velocity',
-    launcherLabel : 'radial velocity',
-    shortDescription : 'Velocity product placeholder',
+    label : 'vradh',
+    launcherLabel : 'vradh',
+    shortDescription : 'Radial velocity',
     isImplemented : false,
     displayMode : null,
   },
-]);
-
-const RADAR_STATION_PLACEHOLDERS = Object.freeze([
-  { id : 'ST_BRZ', code : 'BRZ', name : 'Brzuchania' },
-  { id : 'ST_GDY', code : 'GDY', name : 'Gdynia' },
-  { id : 'ST_GSA', code : 'GSA', name : 'Gora Swietej Anny' },
-  { id : 'ST_LEG', code : 'LEG', name : 'Legionowo' },
-  { id : 'ST_PAS', code : 'PAS', name : 'Pastewnik' },
-  { id : 'ST_POZ', code : 'POZ', name : 'Poznan' },
-  { id : 'ST_RAM', code : 'RAM', name : 'Ramza' },
-  { id : 'ST_RZE', code : 'RZE', name : 'Rzeszow' },
-  { id : 'ST_SWI', code : 'SWI', name : 'Sliwin' },
-  { id : 'ST_UZR', code : 'UZR', name : 'Uzranki' },
 ]);
 
 const RADAR_PRODUCTS_BY_ID = Object.freeze(
@@ -2214,23 +2201,164 @@ class Weatherstation
   }
 }
 
+let radarTowerIconImg = null;
+let radarTowerIconLoadPromise = null;
+let radarTowerIdCounter = 0;
+var selectedRadarTowerId = null;
+var radarPanelModeForMarkers = RADAR_PANEL_MODE_SINGLE_STATION;
+var radarTowerSelectionBridge = null;
+var radarTowerRemovedBridge = null;
+var radarTowerToolClickBridge = null;
+let radarTowerIconSourceRect = null;
+
+function getOpaqueImageBounds(img)
+{
+  const canvasEl = document.createElement('canvas');
+  canvasEl.width = img.naturalWidth || img.width;
+  canvasEl.height = img.naturalHeight || img.height;
+  const ctx = canvasEl.getContext('2d', {willReadFrequently : true});
+  if (!ctx || canvasEl.width <= 0 || canvasEl.height <= 0)
+    return {sx : 0, sy : 0, sw : Math.max(1, canvasEl.width), sh : Math.max(1, canvasEl.height)};
+
+  ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+  ctx.drawImage(img, 0, 0);
+  const pixels = ctx.getImageData(0, 0, canvasEl.width, canvasEl.height).data;
+  const w = canvasEl.width;
+  const h = canvasEl.height;
+
+  let minX = w;
+  let minY = h;
+  let maxX = -1;
+  let maxY = -1;
+
+  for (let y = 0; y < h; y++) {
+    const rowOffset = y * w * 4;
+    for (let x = 0; x < w; x++) {
+      const alpha = pixels[rowOffset + x * 4 + 3];
+      if (alpha > 8) {
+        if (x < minX)
+          minX = x;
+        if (y < minY)
+          minY = y;
+        if (x > maxX)
+          maxX = x;
+        if (y > maxY)
+          maxY = y;
+      }
+    }
+  }
+
+  if (maxX < minX || maxY < minY)
+    return {sx : 0, sy : 0, sw : w, sh : h};
+
+  return {
+    sx : minX,
+    sy : minY,
+    sw : Math.max(1, maxX - minX + 1),
+    sh : Math.max(1, maxY - minY + 1),
+  };
+}
+
+function handleRadarTowerSelectionFromMarker(towerId)
+{
+  if (!towerId)
+    return;
+
+  if (typeof radarTowerSelectionBridge == 'function') {
+    radarTowerSelectionBridge(towerId);
+    return;
+  }
+
+  if (selectedRadarTowerId == towerId) {
+    selectedRadarTowerId = null;
+    radarPanelModeForMarkers = RADAR_PANEL_MODE_COMPOSITE;
+    return;
+  }
+
+  selectedRadarTowerId = towerId;
+  radarPanelModeForMarkers = RADAR_PANEL_MODE_SINGLE_STATION;
+}
+
+function handleRadarTowerRemovedFromMarker(towerId)
+{
+  if (!towerId)
+    return;
+
+  if (typeof radarTowerRemovedBridge == 'function') {
+    radarTowerRemovedBridge(towerId);
+    return;
+  }
+
+  if (selectedRadarTowerId == towerId) {
+    selectedRadarTowerId = null;
+    radarPanelModeForMarkers = RADAR_PANEL_MODE_COMPOSITE;
+  }
+}
+
+function ensureRadarTowerIconLoaded()
+{
+  if (radarTowerIconImg || radarTowerIconLoadPromise)
+    return;
+
+  radarTowerIconLoadPromise = loadImage('resources/img/radar_icon.png')
+    .catch(() => loadImage('resources/img/radar-tower.png'))
+    .then((img) => {
+      radarTowerIconImg = img;
+      radarTowerIconSourceRect = getOpaqueImageBounds(img);
+    })
+    .catch(() => {
+      radarTowerIconImg = null;
+      radarTowerIconSourceRect = null;
+    });
+}
+
+function handleRadarTowerToolClickFromMarker(towerId)
+{
+  if (!towerId)
+    return;
+
+  if (typeof radarTowerToolClickBridge == 'function') {
+    radarTowerToolClickBridge(towerId);
+    return;
+  }
+
+  handleRadarTowerSelectionFromMarker(towerId);
+}
+
 class RadarTower
 {
-  #width = 120;
-  #height = 70;
+  #width = 96;
+  #height = 120;
   #mainDiv;
   #canvas;
   #ctx;
   #x;
   #y;
-  #rangeMeters = 100000.0; // 100 km default range
+  #id;
+  #code;
+  #maxHeightMeters = 100.0;
   #lastMeasureMs = -Infinity;
-  _tmpPixel;
-  _tmpWall;
-  maxDbz = -999.0;
+  #lightSample = new Float32Array(4);
+  #lightBrightness = 1.0;
+  #hideBadge = false;
+  #badgeHitRect = null;
+  #settings;
 
   constructor(xIn, yIn)
   {
+    radarTowerIdCounter += 1;
+    this.#id = 'RT_' + radarTowerIdCounter;
+    this.#code = 'R' + String(radarTowerIdCounter).padStart(2, '0');
+    this.#settings = {
+      name : this.#code,
+      radarType : 'S',
+      enabled : true,
+      customRangeKm : 150,
+      customResolutionKm : 1,
+      customAttenuation : 0.5,
+      customRefreshSec : 2,
+      customBeamWidthDeg : 1,
+    };
     this.#x = Math.floor(xIn);
     this.#y = Math.floor(yIn);
     this.#mainDiv = document.createElement('div');
@@ -2248,18 +2376,32 @@ class RadarTower
 
     this.#canvas.style.position = 'absolute';
     this.#canvas.style.zIndex = 1;
+    this.#canvas.style.cursor = 'default';
 
     let self = this;
     this.#canvas.addEventListener('mousedown', function(event) {
-      if (event.button == 0 && guiControls.tool == 'TOOL_RADAR') {
-        self.destroy();
-        event.stopPropagation();
-      }
+      if (event.button != 0)
+        return;
+      const localPos = self.#getLocalCanvasPos(event);
+      if (!self.#isPointOnBadge(localPos.x, localPos.y))
+        return;
+
+      if (guiControls.tool == 'TOOL_RADAR')
+        handleRadarTowerToolClickFromMarker(self.#id);
+      else
+        handleRadarTowerSelectionFromMarker(self.#id);
+      event.stopPropagation();
+    });
+    this.#canvas.addEventListener('mousemove', function(event) {
+      const localPos = self.#getLocalCanvasPos(event);
+      self.#canvas.style.cursor = self.#isPointOnBadge(localPos.x, localPos.y) ? 'pointer' : 'default';
+    });
+    this.#canvas.addEventListener('mouseleave', function() {
+      self.#canvas.style.cursor = 'default';
     });
     this.#canvas.addEventListener('contextmenu', function(e) { e.preventDefault(); });
 
-    this._tmpPixel = new Float32Array(4);
-    this._tmpWall = new Int8Array(4);
+    ensureRadarTowerIconLoaded();
     this.setHidden(false);
   }
 
@@ -2267,95 +2409,221 @@ class RadarTower
   {
     const now = nowMs ?? (performance.now ? performance.now() : Date.now());
     const minInterval = Math.max(16, guiControls.reflectivityRefreshSec * 1000.0);
-    if (now - this.#lastMeasureMs < minInterval) {
-      this.updateCanvas();
+    if (now - this.#lastMeasureMs < minInterval)
       return;
-    }
 
-    // sample max dBZ within rangeMeters using coarse grid to avoid stutter
-    const rangeCells = Math.min(this.#rangeMeters / cellHeight, Math.min(sim_res_x, sim_res_y));
-    const sampleGrid = 25; // ~25 x 25 samples
-    const step = Math.max(8, Math.floor((rangeCells * 2) / sampleGrid));
-    const radius2 = rangeCells * rangeCells;
-    const minX = Math.max(0, Math.floor(this.#x - rangeCells));
-    const maxX = Math.min(sim_res_x - 1, Math.floor(this.#x + rangeCells));
-    const minY = Math.max(0, Math.floor(this.#y - rangeCells));
-    const maxY = Math.min(sim_res_y - 1, Math.floor(this.#y + rangeCells));
+    gl.bindFramebuffer(gl.FRAMEBUFFER, lightFrameBuff_0);
+    gl.readBuffer(gl.COLOR_ATTACHMENT0);
+    gl.readPixels(this.#x, this.#y, 1, 1, gl.RGBA, gl.FLOAT, this.#lightSample);
 
-    gl.bindFramebuffer(gl.FRAMEBUFFER, reflectivitySnapshotFBO);
-    gl.readBuffer(gl.COLOR_ATTACHMENT0); // reflectivitySnapshotTex
+    const directSun = Math.max(this.#lightSample[0], 0.0);
+    const ambientIR = Math.max(this.#lightSample[2], 0.0);
+    const sunlightNorm = Math.min(directSun / 900.0, 1.0);
+    const ambientNorm = Math.min(ambientIR / 300.0, 1.0);
+    this.#lightBrightness = clamp(0.36 + sunlightNorm * 0.62 + ambientNorm * 0.20, 0.32, 1.18);
 
-    let maxDbzLocal = -999.0;
-    for (let yy = minY; yy <= maxY; yy += step) {
-      let dy = yy - this.#y;
-      for (let xx = minX; xx <= maxX; xx += step) {
-        let dx = xx - this.#x;
-        if (dx * dx + dy * dy > radius2)
-          continue;
-        gl.readPixels(xx, yy, 1, 1, gl.RGBA, gl.FLOAT, this._tmpPixel);
-        let zhLinear = Math.max(this._tmpPixel[0], 0.0);
-        if (zhLinear <= 0.0)
-          continue;
-
-        // skip ground/obstacle cells by checking wall texture
-        gl.bindFramebuffer(gl.FRAMEBUFFER, frameBuff_1);
-        gl.readBuffer(gl.COLOR_ATTACHMENT2); // wallTexture_1
-        gl.readPixels(xx, yy, 1, 1, gl.RGBA_INTEGER, gl.BYTE, this._tmpWall);
-        gl.bindFramebuffer(gl.FRAMEBUFFER, reflectivitySnapshotFBO);
-        gl.readBuffer(gl.COLOR_ATTACHMENT0);
-        if (this._tmpWall[1] <= 0) // wall/ground -> ignore clutter
-          continue;
-
-        let z_raw = Math.sqrt(zhLinear) * guiControls.reflectivityGain + zhLinear * guiControls.reflectivityBoost;
-        let dbz = 10.0 * Math.log10(z_raw + 1e-6);
-        if (dbz > maxDbzLocal)
-          maxDbzLocal = dbz;
-      }
-    }
-    this.maxDbz = maxDbzLocal;
     this.#lastMeasureMs = now;
-    this.updateCanvas();
   }
 
   updateCanvas()
   {
-    let screenX = simToScreenX(this.#x) - this.#width / 2;
-    let screenY = simToScreenY(this.#y) - this.#height;
+    const selected = selectedRadarTowerId == this.#id && radarPanelModeForMarkers == RADAR_PANEL_MODE_SINGLE_STATION;
+    const disabled = this.#settings && this.#settings.enabled === false;
+    const markerNow = performance.now ? performance.now() : Date.now();
+    const pulse = 0.5 + 0.5 * Math.sin(markerNow * 0.008);
 
-    this.#mainDiv.style.left = screenX + 'px';
-    this.#mainDiv.style.top = screenY + 'px';
+    // Keep tower visualized as fixed 100 m in simulation space.
+    const towerHeightInCells = this.#maxHeightMeters / Math.max(cellHeight, 0.000001);
+    const groundAnchorSimY = this.#y - 0.5;
+    const baseScreenY = simToScreenY(groundAnchorSimY);
+    const topScreenY = simToScreenY(groundAnchorSimY + towerHeightInCells);
+    const iconH = Math.max(2, Math.round(Math.abs(baseScreenY - topScreenY)));
 
-    let c = this.#ctx;
+    const iconAspect = radarTowerIconSourceRect && radarTowerIconSourceRect.sh > 0 ?
+      (radarTowerIconSourceRect.sw / radarTowerIconSourceRect.sh) :
+      (radarTowerIconImg && radarTowerIconImg.naturalHeight > 0 ? (radarTowerIconImg.naturalWidth / radarTowerIconImg.naturalHeight) : 1.0);
+    const iconW = Math.max(2, Math.round(iconH * iconAspect));
+
+    const badgeText = this.#code;
+    const c = this.#ctx;
+    c.font = '600 16px "Cascadia Code", monospace';
+    const badgeTextW = c.measureText(badgeText).width;
+    const badgeW = Math.ceil(badgeTextW + 44);
+    const badgeH = 32;
+    const badgeGroundMargin = 10;
+    const sidePad = 6;
+    const topPad = 6;
+    const bottomPad = 0;
+
+    const contentW = Math.max(iconW, badgeW);
+    const contentH = badgeH + badgeGroundMargin + iconH;
+    const nextWidth = Math.ceil(contentW + sidePad * 2);
+    const nextHeight = Math.ceil(contentH + topPad + bottomPad);
+
+    if (nextWidth != this.#width || nextHeight != this.#height) {
+      this.#width = nextWidth;
+      this.#height = nextHeight;
+      this.#canvas.width = this.#width;
+      this.#canvas.height = this.#height;
+    }
+
+    const screenX = simToScreenX(this.#x) - this.#width * 0.5;
+    const screenY = baseScreenY - this.#height;
+    this.#mainDiv.style.left = Math.round(screenX) + 'px';
+    this.#mainDiv.style.top = Math.round(screenY) + 'px';
+
     c.clearRect(0, 0, this.#width, this.#height);
     c.fillStyle = '#00000000';
     c.fillRect(0, 0, this.#width, this.#height);
 
-    c.font = '15px Arial';
-    c.fillStyle = '#FFFFFF';
-    c.fillText('Radar Tower', 10, 15);
+    const iconX = Math.floor((this.#width - iconW) * 0.5);
+    const iconY = this.#height - bottomPad - iconH;
+    if (radarTowerIconImg) {
+      c.save();
+      c.filter = 'brightness(' + Math.round(this.#lightBrightness * 100) + '%)';
+      if (radarTowerIconSourceRect) {
+        c.drawImage(
+          radarTowerIconImg,
+          radarTowerIconSourceRect.sx,
+          radarTowerIconSourceRect.sy,
+          radarTowerIconSourceRect.sw,
+          radarTowerIconSourceRect.sh,
+          iconX,
+          iconY,
+          iconW,
+          iconH
+        );
+      } else {
+        c.drawImage(radarTowerIconImg, iconX, iconY, iconW, iconH);
+      }
+      c.restore();
+    }
 
-    c.font = '12px Arial';
-    c.fillStyle = '#00FFFF';
-    c.fillText('Range: 100 km', 10, 30);
+    if (!this.#hideBadge) {
+      const badgeX = Math.floor(iconX + (iconW - badgeW) * 0.5);
+      const badgeY = Math.floor(iconY - badgeH - badgeGroundMargin);
+      this.#badgeHitRect = {x : badgeX, y : badgeY, w : badgeW, h : badgeH};
 
-    const hasEcho = this.maxDbz > -900;
-    c.font = '18px Arial';
-    c.fillStyle = hasEcho ? '#ffcc00' : '#cccccc';
-    c.fillText(hasEcho ? this.maxDbz.toFixed(1) + ' dBZ' : '-- dBZ', 10, 52);
+      c.fillStyle = disabled ? 'rgba(44, 12, 16, 0.94)' : 'rgba(6, 17, 38, 0.94)';
+      this.#roundRect(c, badgeX, badgeY, badgeW, badgeH, 11);
+      c.fill();
 
-    // position pointer line (same style as weather station)
-    c.beginPath();
-    c.moveTo(this.#width / 2, this.#height * 0.80);
-    c.lineTo(this.#width / 2, this.#height);
-    c.strokeStyle = 'white';
-    c.stroke();
+      c.lineWidth = selected ? 1.25 : 1;
+      c.strokeStyle = disabled ? 'rgba(255, 108, 108, 0.72)' :
+                     (selected ? 'rgba(123, 203, 255, 0.78)' : 'rgba(255, 255, 255, 0.18)');
+      this.#roundRect(c, badgeX + 0.5, badgeY + 0.5, badgeW - 1, badgeH - 1, 10);
+      c.stroke();
+
+      if (selected) {
+        c.save();
+        c.globalAlpha = 0.28 + pulse * 0.28;
+        c.shadowColor = disabled ? 'rgba(255, 82, 82, 0.95)' : 'rgba(76, 179, 255, 0.95)';
+        c.shadowBlur = 12 + pulse * 10;
+        c.strokeStyle = disabled ? 'rgba(255, 104, 104, 0.95)' : 'rgba(116, 205, 255, 0.95)';
+        c.lineWidth = 1.8;
+        this.#roundRect(c, badgeX - 0.5, badgeY - 0.5, badgeW + 1, badgeH + 1, 11);
+        c.stroke();
+        c.restore();
+      }
+
+      c.font = '600 16px "Cascadia Code", monospace';
+      c.fillStyle = disabled ? '#ffd3d3' : (selected ? '#ffffff' : '#eaf1ff');
+      c.fillText(badgeText, badgeX + 12, badgeY + 22);
+
+      const ledX = badgeX + badgeW - 15;
+      const ledY = badgeY + badgeH * 0.5;
+      c.beginPath();
+      c.arc(ledX, ledY, 3.2, 0, Math.PI * 2);
+      c.fillStyle = disabled ? '#ff4f4f' : '#35e77e';
+      c.fill();
+
+      if (selected) {
+        c.save();
+        c.globalAlpha = 0.42 + pulse * 0.32;
+        c.beginPath();
+        c.arc(ledX, ledY, 5.8 + pulse * 1.8, 0, Math.PI * 2);
+        c.strokeStyle = disabled ? '#ff7a7a' : '#68f3a0';
+        c.lineWidth = 1.2;
+        c.stroke();
+        c.restore();
+      }
+    } else {
+      this.#badgeHitRect = null;
+    }
   }
 
   setHidden(hidden)
   {
-    this.#mainDiv.style.display = hidden ? 'none' : 'block';
+    this.#hideBadge = !!hidden;
+    this.#badgeHitRect = null;
+    this.#canvas.style.cursor = 'default';
+    this.#mainDiv.style.display = 'block';
   }
 
+  #getLocalCanvasPos(event)
+  {
+    const rect = this.#canvas.getBoundingClientRect();
+    const scaleX = rect.width > 0 ? this.#canvas.width / rect.width : 1;
+    const scaleY = rect.height > 0 ? this.#canvas.height / rect.height : 1;
+    return {
+      x : (event.clientX - rect.left) * scaleX,
+      y : (event.clientY - rect.top) * scaleY,
+    };
+  }
+
+  #isPointOnBadge(x, y)
+  {
+    if (!this.#badgeHitRect || this.#hideBadge)
+      return false;
+    return x >= this.#badgeHitRect.x &&
+           x <= this.#badgeHitRect.x + this.#badgeHitRect.w &&
+           y >= this.#badgeHitRect.y &&
+           y <= this.#badgeHitRect.y + this.#badgeHitRect.h;
+  }
+
+  #roundRect(ctx, x, y, width, height, radius)
+  {
+    const r = Math.min(radius, width * 0.5, height * 0.5);
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + width, y, x + width, y + height, r);
+    ctx.arcTo(x + width, y + height, x, y + height, r);
+    ctx.arcTo(x, y + height, x, y, r);
+    ctx.arcTo(x, y, x + width, y, r);
+    ctx.closePath();
+  }
+
+  getId() { return this.#id; }
+  getCode() { return this.#code; }
+  getSettings() { return this.#settings; }
+
+  setName(nextName)
+  {
+    const cleaned = String(nextName || '')
+      .replace(/[^A-Za-z0-9]/g, '')
+      .toUpperCase()
+      .slice(0, 4);
+    this.#settings.name = cleaned;
+    this.#code = cleaned;
+  }
+
+  setRadarType(nextType)
+  {
+    if (nextType != 'X' && nextType != 'C' && nextType != 'S' && nextType != 'CUSTOM')
+      return;
+    this.#settings.radarType = nextType;
+  }
+
+  setEnabled(enabled)
+  {
+    this.#settings.enabled = !!enabled;
+  }
+
+  setCustomRangeKm(value) { this.#settings.customRangeKm = value; }
+  setCustomResolutionKm(value) { this.#settings.customResolutionKm = value; }
+  setCustomAttenuation(value) { this.#settings.customAttenuation = value; }
+  setCustomRefreshSec(value) { this.#settings.customRefreshSec = value; }
+  setCustomBeamWidthDeg(value) { this.#settings.customBeamWidthDeg = value; }
   getXpos() { return this.#x; }
   getYpos() { return this.#y; }
 
@@ -2364,8 +2632,10 @@ class RadarTower
     if (this.#mainDiv && this.#mainDiv.parentNode)
       this.#mainDiv.parentNode.removeChild(this.#mainDiv);
     let idx = radarTowers.indexOf(this);
-    if (idx >= 0)
+    if (idx >= 0) {
       radarTowers.splice(idx, 1);
+      handleRadarTowerRemovedFromMarker(this.#id);
+    }
   }
 }
 
@@ -5315,10 +5585,19 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   var radarSettingsTitleEl = null;
   var radarSettingsMetaEl = null;
   var radarSettingsContentEl = null;
+  var radarTowerPopupEl = null;
+  var radarTowerPopupBodyEl = null;
+  var radarTowerPopupTitleEl = null;
+  var radarTowerPopupCloseEl = null;
+  var radarTowerPopupTowerId = null;
+  var radarTowerPopupDragging = false;
+  var radarTowerPopupDragOffsetX = 0;
+  var radarTowerPopupDragOffsetY = 0;
   var radarDrawerOpen = false;
   var radarSettingsOpen = false;
   var radarPanelMode = RADAR_PANEL_MODE_SINGLE_STATION;
-  var selectedRadarStationPlaceholderId = 'ST_RZE';
+  radarPanelModeForMarkers = radarPanelMode;
+  selectedRadarTowerId = null;
 
   function formatRadarUiNumber(value, digits = 2)
   {
@@ -5332,15 +5611,339 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     return RADAR_PRODUCTS;
   }
 
-  function getSelectedRadarPlaceholderStation()
+  function getSelectedRadarTower()
   {
-    return RADAR_STATION_PLACEHOLDERS.find((station) => station.id == selectedRadarStationPlaceholderId) || RADAR_STATION_PLACEHOLDERS[0];
+    return radarTowers.find((tower) => tower.getId() == selectedRadarTowerId) || null;
   }
+
+  function setSelectedRadarTower(towerId)
+  {
+    if (!towerId) {
+      selectedRadarTowerId = null;
+      setRadarPanelMode(RADAR_PANEL_MODE_COMPOSITE);
+      return;
+    }
+
+    const tower = radarTowers.find((entry) => entry.getId() == towerId);
+    if (!tower)
+      return;
+
+    selectedRadarTowerId = towerId;
+    setRadarPanelMode(RADAR_PANEL_MODE_SINGLE_STATION);
+  }
+
+  function toggleRadarTowerSelection(towerId)
+  {
+    if (!towerId)
+      return;
+
+    if (selectedRadarTowerId == towerId) {
+      selectedRadarTowerId = null;
+      setRadarPanelMode(RADAR_PANEL_MODE_COMPOSITE);
+      return;
+    }
+
+    setSelectedRadarTower(towerId);
+  }
+
+  function handleRadarTowerRemoved(towerId)
+  {
+    if (!towerId)
+      return;
+
+    if (selectedRadarTowerId == towerId) {
+      selectedRadarTowerId = null;
+      setRadarPanelMode(RADAR_PANEL_MODE_COMPOSITE);
+      if (radarTowerPopupTowerId == towerId)
+        closeRadarTowerPopup();
+      return;
+    }
+
+    if (radarTowerPopupTowerId == towerId)
+      closeRadarTowerPopup();
+
+    if (radarDrawerOpen)
+      renderRadarStationList();
+  }
+
+  function ensureRadarTowerPopup()
+  {
+    if (radarTowerPopupEl)
+      return;
+
+    const popup = document.createElement('div');
+    popup.id = 'radarTowerSettingsPopup';
+    popup.style.position = 'fixed';
+    popup.style.left = '20px';
+    popup.style.top = '110px';
+    popup.style.width = '360px';
+    popup.style.maxWidth = 'min(94vw, 420px)';
+    popup.style.maxHeight = 'min(78vh, 640px)';
+    popup.style.display = 'none';
+    popup.style.flexDirection = 'column';
+    popup.style.overflow = 'hidden';
+    popup.style.zIndex = '6';
+    popup.style.borderRadius = '14px';
+    popup.style.border = '1px solid rgba(255, 186, 133, 0.28)';
+    popup.style.background = 'linear-gradient(180deg, rgba(20, 24, 40, 0.97), rgba(12, 16, 30, 0.98))';
+    popup.style.boxShadow = '0 18px 38px rgba(0,0,0,0.42), inset 0 1px 0 rgba(255,255,255,0.04)';
+    popup.style.backdropFilter = 'blur(10px)';
+    popup.style.pointerEvents = 'auto';
+
+    const header = document.createElement('div');
+    header.style.display = 'grid';
+    header.style.gridTemplateColumns = '1fr auto';
+    header.style.alignItems = 'center';
+    header.style.gap = '8px';
+    header.style.padding = '10px 12px';
+    header.style.cursor = 'move';
+    header.style.borderBottom = '1px solid rgba(255,255,255,0.08)';
+    header.style.background = 'linear-gradient(180deg, rgba(43, 53, 86, 0.45), rgba(21, 28, 47, 0.45))';
+
+    const title = document.createElement('div');
+    title.style.fontFamily = '"Cascadia Code", monospace';
+    title.style.fontSize = '0.92rem';
+    title.style.fontWeight = '700';
+    title.style.color = '#fff2e6';
+    title.textContent = 'Radar Tower Settings';
+    header.appendChild(title);
+    radarTowerPopupTitleEl = title;
+
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.textContent = '×';
+    closeBtn.setAttribute('aria-label', 'Close radar tower settings');
+    closeBtn.style.width = '30px';
+    closeBtn.style.height = '30px';
+    closeBtn.style.borderRadius = '8px';
+    closeBtn.style.border = '1px solid rgba(255,255,255,0.16)';
+    closeBtn.style.background = 'rgba(12, 16, 28, 0.8)';
+    closeBtn.style.color = '#f1f3ff';
+    closeBtn.style.fontSize = '1rem';
+    closeBtn.style.cursor = 'pointer';
+    closeBtn.addEventListener('click', function(event) {
+      event.stopPropagation();
+      closeRadarTowerPopup();
+    });
+    header.appendChild(closeBtn);
+    radarTowerPopupCloseEl = closeBtn;
+
+    header.addEventListener('mousedown', function(event) {
+      if (event.button != 0)
+        return;
+      radarTowerPopupDragging = true;
+      const rect = popup.getBoundingClientRect();
+      radarTowerPopupDragOffsetX = event.clientX - rect.left;
+      radarTowerPopupDragOffsetY = event.clientY - rect.top;
+      event.preventDefault();
+    });
+
+    const body = document.createElement('div');
+    body.style.padding = '10px 12px 12px';
+    body.style.display = 'grid';
+    body.style.gap = '10px';
+    body.style.overflowY = 'auto';
+    body.style.minHeight = '0';
+    radarTowerPopupBodyEl = body;
+
+    popup.appendChild(header);
+    popup.appendChild(body);
+    document.body.appendChild(popup);
+    radarTowerPopupEl = popup;
+
+    window.addEventListener('mousemove', function(event) {
+      if (!radarTowerPopupDragging || !radarTowerPopupEl)
+        return;
+      const nextLeft = event.clientX - radarTowerPopupDragOffsetX;
+      const nextTop = event.clientY - radarTowerPopupDragOffsetY;
+      const maxLeft = Math.max(8, window.innerWidth - radarTowerPopupEl.offsetWidth - 8);
+      const maxTop = Math.max(8, window.innerHeight - radarTowerPopupEl.offsetHeight - 8);
+      radarTowerPopupEl.style.left = clamp(nextLeft, 8, maxLeft) + 'px';
+      radarTowerPopupEl.style.top = clamp(nextTop, 8, maxTop) + 'px';
+    });
+    window.addEventListener('mouseup', function() {
+      radarTowerPopupDragging = false;
+    });
+  }
+
+  function closeRadarTowerPopup()
+  {
+    if (!radarTowerPopupEl)
+      return;
+    radarTowerPopupEl.style.display = 'none';
+    radarTowerPopupTowerId = null;
+    radarTowerPopupDragging = false;
+  }
+
+  function positionRadarTowerPopupNearTower(tower)
+  {
+    if (!radarTowerPopupEl || !tower)
+      return;
+
+    const anchorX = simToScreenX(tower.getXpos());
+    const anchorY = simToScreenY(tower.getYpos());
+    const popupW = radarTowerPopupEl.offsetWidth || 360;
+    const popupH = radarTowerPopupEl.offsetHeight || 420;
+
+    let nextLeft = Math.round(anchorX + 20);
+    let nextTop = Math.round(anchorY - popupH * 0.62);
+    const maxLeft = Math.max(8, window.innerWidth - popupW - 8);
+    const maxTop = Math.max(8, window.innerHeight - popupH - 8);
+    nextLeft = clamp(nextLeft, 8, maxLeft);
+    nextTop = clamp(nextTop, 8, maxTop);
+
+    radarTowerPopupEl.style.left = nextLeft + 'px';
+    radarTowerPopupEl.style.top = nextTop + 'px';
+  }
+
+  function renderRadarTowerPopup()
+  {
+    if (!radarTowerPopupBodyEl)
+      return;
+
+    const tower = radarTowers.find((entry) => entry.getId() == radarTowerPopupTowerId) || null;
+    radarTowerPopupBodyEl.replaceChildren();
+    if (!tower)
+      return;
+
+    const settings = tower.getSettings();
+    if (radarTowerPopupTitleEl)
+      radarTowerPopupTitleEl.textContent = 'Radar Tower Settings - ' + tower.getCode();
+
+    appendRadarTextControl(radarTowerPopupBodyEl, {
+      label : 'Radar Name',
+      description : 'Up to 4 characters.',
+      value : settings.name,
+      placeholder : 'R001',
+      maxLength : 4,
+      onInput : function(value, inputEl) {
+        tower.setName(value);
+        handleRadarUiExternalChange();
+        if (inputEl)
+          inputEl.value = tower.getCode();
+      },
+    });
+
+    appendRadarSelectControl(radarTowerPopupBodyEl, {
+      label : 'Radar Type',
+      value : settings.radarType,
+      options : [
+        {value : 'X', label : 'X-band'},
+        {value : 'C', label : 'C-band'},
+        {value : 'S', label : 'S-band'},
+        {value : 'CUSTOM', label : 'Custom'},
+      ],
+      onChange : function(nextType) {
+        tower.setRadarType(nextType);
+        renderRadarTowerPopup();
+      },
+    });
+
+    if (settings.radarType == 'CUSTOM') {
+      appendRadarRangeControl(radarTowerPopupBodyEl, {
+        label : 'Range (km)',
+        description : 'Placeholder custom range.',
+        min : 10,
+        max : 400,
+        step : 1,
+        getValue : function() { return settings.customRangeKm; },
+        formatValue : function(value) { return Math.round(value).toString(); },
+        onInput : function(value) { tower.setCustomRangeKm(Math.round(value)); },
+      });
+
+      appendRadarRangeControl(radarTowerPopupBodyEl, {
+        label : 'Resolution (km)',
+        description : 'Placeholder radar bin size.',
+        min : 0.1,
+        max : 5,
+        step : 0.1,
+        getValue : function() { return settings.customResolutionKm; },
+        formatValue : function(value) { return formatRadarUiNumber(value, 1); },
+        onInput : function(value) { tower.setCustomResolutionKm(value); },
+      });
+
+      appendRadarRangeControl(radarTowerPopupBodyEl, {
+        label : 'Attenuation',
+        description : 'Placeholder signal attenuation.',
+        min : 0,
+        max : 5,
+        step : 0.01,
+        getValue : function() { return settings.customAttenuation; },
+        formatValue : function(value) { return formatRadarUiNumber(value, 2); },
+        onInput : function(value) { tower.setCustomAttenuation(value); },
+      });
+
+      appendRadarRangeControl(radarTowerPopupBodyEl, {
+        label : 'Refresh Rate (s)',
+        description : 'Placeholder per-radar refresh.',
+        min : 0.1,
+        max : 20,
+        step : 0.1,
+        getValue : function() { return settings.customRefreshSec; },
+        formatValue : function(value) { return formatRadarUiNumber(value, 1); },
+        onInput : function(value) { tower.setCustomRefreshSec(value); },
+      });
+
+      appendRadarRangeControl(radarTowerPopupBodyEl, {
+        label : 'Beam Width (deg)',
+        description : 'Placeholder beam width.',
+        min : 0.1,
+        max : 8,
+        step : 0.1,
+        getValue : function() { return settings.customBeamWidthDeg; },
+        formatValue : function(value) { return formatRadarUiNumber(value, 1); },
+        onInput : function(value) { tower.setCustomBeamWidthDeg(value); },
+      });
+    }
+
+    appendRadarActionControl(radarTowerPopupBodyEl, {
+      label : 'Radar Actions',
+      actions : [
+        {
+          label : settings.enabled ? 'Disable In Composite' : 'Enable In Composite',
+          onClick : function() {
+            tower.setEnabled(!settings.enabled);
+            handleRadarUiExternalChange();
+            renderRadarTowerPopup();
+          },
+        },
+        {
+          label : 'Remove Radar',
+          variant : 'danger',
+          onClick : function() {
+            tower.destroy();
+            if (radarDrawerOpen)
+              renderRadarStationList();
+          },
+        },
+      ],
+      note : 'These controls are placeholders for future radar logic.',
+    });
+  }
+
+  function handleRadarTowerToolClick(towerId)
+  {
+    if (!towerId)
+      return;
+
+    setSelectedRadarTower(towerId);
+    ensureRadarTowerPopup();
+    radarTowerPopupTowerId = towerId;
+    radarTowerPopupEl.style.display = 'flex';
+    renderRadarTowerPopup();
+    const tower = radarTowers.find((entry) => entry.getId() == towerId) || null;
+    positionRadarTowerPopupNearTower(tower);
+  }
+
+  radarTowerSelectionBridge = toggleRadarTowerSelection;
+  radarTowerRemovedBridge = handleRadarTowerRemoved;
+  radarTowerToolClickBridge = handleRadarTowerToolClick;
 
   function setRadarPanelMode(nextMode)
   {
     const mode = nextMode == RADAR_PANEL_MODE_SINGLE_STATION ? RADAR_PANEL_MODE_SINGLE_STATION : RADAR_PANEL_MODE_COMPOSITE;
     radarPanelMode = mode;
+    radarPanelModeForMarkers = mode;
 
     if (mode == RADAR_PANEL_MODE_COMPOSITE && guiControls.selectedRadarProduct != RADAR_PRODUCT_REFLECTIVITY) {
       setSelectedRadarProduct(RADAR_PRODUCT_REFLECTIVITY, {activateIfImplemented : true});
@@ -5362,12 +5965,15 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     radarDrawerPanelEl.setAttribute('aria-hidden', radarDrawerOpen ? 'false' : 'true');
     if (radarDrawerLauncherLabelEl)
       radarDrawerLauncherLabelEl.textContent = selectedRadarProduct.launcherLabel;
+    const selectedRadarTower = getSelectedRadarTower();
     if (radarDrawerLauncherStationBadgeEl) {
-      radarDrawerLauncherStationBadgeEl.textContent = 'RADAR';
-      radarDrawerLauncherStationBadgeEl.classList.toggle('is-hidden', radarPanelMode == RADAR_PANEL_MODE_COMPOSITE);
+      radarDrawerLauncherStationBadgeEl.textContent = selectedRadarTower ? selectedRadarTower.getCode() : 'RADAR';
+      radarDrawerLauncherStationBadgeEl.classList.toggle('is-hidden', !selectedRadarTower || radarPanelMode == RADAR_PANEL_MODE_COMPOSITE);
     }
     if (radarDrawerLocationEl)
-      radarDrawerLocationEl.textContent = radarPanelMode == RADAR_PANEL_MODE_COMPOSITE ? 'Composite (Poland)' : 'Single Radar (Poland)';
+      radarDrawerLocationEl.textContent = selectedRadarTower && radarPanelMode == RADAR_PANEL_MODE_SINGLE_STATION ?
+        selectedRadarTower.getCode() + ' (Poland)' :
+        (radarPanelMode == RADAR_PANEL_MODE_SINGLE_STATION ? 'No station selected' : 'Composite (Poland)');
     if (radarPanelCompositeTabEl) {
       const compositeTabSelected = radarPanelMode == RADAR_PANEL_MODE_COMPOSITE;
       radarPanelCompositeTabEl.classList.toggle('is-active', compositeTabSelected);
@@ -5513,6 +6119,42 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     });
 
     wrapper.appendChild(select);
+    parent.appendChild(wrapper);
+  }
+
+  function appendRadarTextControl(parent, config)
+  {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'radar-control radar-control--select';
+
+    const topRow = document.createElement('div');
+    topRow.className = 'radar-control__toprow';
+
+    const labelEl = document.createElement('span');
+    labelEl.className = 'radar-control__label';
+    labelEl.textContent = config.label;
+    topRow.appendChild(labelEl);
+    wrapper.appendChild(topRow);
+
+    if (config.description) {
+      const descriptionEl = document.createElement('span');
+      descriptionEl.className = 'radar-control__description';
+      descriptionEl.textContent = config.description;
+      wrapper.appendChild(descriptionEl);
+    }
+
+    const input = document.createElement('input');
+    input.className = 'radar-control__select';
+    input.type = 'text';
+    input.maxLength = config.maxLength || 64;
+    input.value = config.value || '';
+    input.placeholder = config.placeholder || '';
+    input.addEventListener('input', function(event) {
+      if (typeof config.onInput == 'function')
+        config.onInput(event.target.value, event.target);
+    });
+
+    wrapper.appendChild(input);
     parent.appendChild(wrapper);
   }
 
@@ -5744,27 +6386,62 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       return;
 
     radarStationListEl.replaceChildren();
+
+    if (radarTowers.length == 0) {
+      if (radarStationSummaryEl)
+        radarStationSummaryEl.textContent = 'No deployed radars';
+
+      const emptyCard = document.createElement('div');
+      emptyCard.className = 'radar-station-card is-muted';
+
+      const copy = document.createElement('div');
+      copy.className = 'radar-product-card__copy';
+
+      const label = document.createElement('span');
+      label.className = 'radar-product-card__label';
+      label.textContent = 'No stations';
+      copy.appendChild(label);
+
+      const description = document.createElement('span');
+      description.className = 'radar-product-card__description';
+      description.textContent = 'Deploy radar towers to populate this list.';
+      copy.appendChild(description);
+
+      emptyCard.appendChild(copy);
+      radarStationListEl.appendChild(emptyCard);
+      return;
+    }
+
     if (radarStationSummaryEl)
-      radarStationSummaryEl.textContent = 'No deployed radars';
+      radarStationSummaryEl.textContent = radarTowers.length + ' station' + (radarTowers.length == 1 ? '' : 's') + ' deployed';
 
-    const emptyCard = document.createElement('div');
-    emptyCard.className = 'radar-station-card is-muted';
+    for (const tower of radarTowers) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'radar-station-card';
+      if (tower.getId() == selectedRadarTowerId && radarPanelMode == RADAR_PANEL_MODE_SINGLE_STATION)
+        button.classList.add('is-selected');
 
-    const copy = document.createElement('div');
-    copy.className = 'radar-product-card__copy';
+      const copy = document.createElement('div');
+      copy.className = 'radar-product-card__copy';
 
-    const label = document.createElement('span');
-    label.className = 'radar-product-card__label';
-    label.textContent = 'No stations';
-    copy.appendChild(label);
+      const label = document.createElement('span');
+      label.className = 'radar-product-card__label';
+      label.textContent = tower.getCode();
+      copy.appendChild(label);
 
-    const description = document.createElement('span');
-    description.className = 'radar-product-card__description';
-    description.textContent = 'Deploy radar towers to populate this list.';
-    copy.appendChild(description);
+      const description = document.createElement('span');
+      description.className = 'radar-product-card__description';
+      description.textContent = 'Radar tower';
+      copy.appendChild(description);
 
-    emptyCard.appendChild(copy);
-    radarStationListEl.appendChild(emptyCard);
+      button.appendChild(copy);
+      button.addEventListener('click', function() {
+        toggleRadarTowerSelection(tower.getId());
+      });
+
+      radarStationListEl.appendChild(button);
+    }
   }
 
   function renderRadarSettings()
@@ -5978,7 +6655,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         <button id="radarDrawerLauncher" class="radar-drawer__launcher" type="button" aria-label="Toggle radar panel" aria-controls="radarDrawerPanel" aria-expanded="false">
           <span class="radar-drawer__launcher-icon" aria-hidden="true"></span>
           <span id="radarDrawerLauncherLabel" class="radar-drawer__launcher-label">pvol</span>
-          <span id="radarDrawerLauncherStationBadge" class="radar-drawer__launcher-station-badge">RZE</span>
+          <span id="radarDrawerLauncherStationBadge" class="radar-drawer__launcher-station-badge">RADAR</span>
         </button>
         <section id="radarDrawerPanel" class="radar-drawer__panel" aria-hidden="true">
           <div class="radar-drawer__header">
@@ -7004,8 +7681,11 @@ var soundingGraph = {
         let simXpos = Math.floor(mouseXinSim * sim_res_x);
         let simYpos = findSimYposAboveSurfaceAtMouseX();
 
-        if (simXpos >= 0 && simXpos < sim_res_x)
+        if (simXpos >= 0 && simXpos < sim_res_x) {
           radarTowers.push(new RadarTower(simXpos, simYpos));
+          if (radarDrawerOpen)
+            renderRadarStationList();
+        }
         radarNeedsMeasure = true;
       }
     } else if (e.button == 1) {
@@ -7100,7 +7780,21 @@ var soundingGraph = {
     }
   }
 
+  function isTypingInFormField(event)
+  {
+    const target = event.target;
+    if (!target)
+      return false;
+    if (target.isContentEditable)
+      return true;
+    const tag = (target.tagName || '').toUpperCase();
+    return tag == 'INPUT' || tag == 'TEXTAREA' || tag == 'SELECT';
+  }
+
   document.addEventListener('keydown', (event) => {
+    if (isTypingInFormField(event))
+      return;
+
     if (event.code == 'ControlLeft') {
       ctrlPressed = true;
     }
@@ -7256,6 +7950,9 @@ var soundingGraph = {
       displayWeatherStations = true;
       for (i = 0; i < weatherStations.length; i++) {
         weatherStations[i].setHidden(false);
+      }
+      for (i = 0; i < radarTowers.length; i++) {
+        radarTowers[i].setHidden(false);
       }
     } else if (event.code == 'Period') {
       airplane.setBrakes(true);
@@ -9703,11 +10400,11 @@ var soundingGraph = {
     for (i = 0; i < weatherStations.length; i++) {
       weatherStations[i].updateCanvas(); // update weather stations
     }
-    for (i = 0; i < radarTowers.length; i++) {
-      radarTowers[i].updateCanvas(); // keep position synced with camera
-    }
   }
-  if (displayWeatherStations && radarNeedsMeasure && radarTowers.length > 0) {
+  for (i = 0; i < radarTowers.length; i++) {
+    radarTowers[i].updateCanvas(); // keep position synced with camera
+  }
+  if (radarNeedsMeasure && radarTowers.length > 0) {
     const nowRadar = performance.now ? performance.now() : Date.now();
     for (i = 0; i < radarTowers.length; i++) {
       radarTowers[i].measure(nowRadar);
