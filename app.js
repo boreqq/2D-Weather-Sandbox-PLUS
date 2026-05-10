@@ -2418,7 +2418,8 @@ class RadarTower
     const ambientIR = Math.max(this.#lightSample[2], 0.0);
     const sunlightNorm = Math.min(directSun / 900.0, 1.0);
     const ambientNorm = Math.min(ambientIR / 300.0, 1.0);
-    this.#lightBrightness = clamp(0.36 + sunlightNorm * 0.62 + ambientNorm * 0.20, 0.32, 1.18);
+    // Keep tower texture dark at night; brighten mainly with direct sunlight.
+    this.#lightBrightness = clamp(0.06 + sunlightNorm * 0.92 + ambientNorm * 0.08, 0.05, 1.15);
 
     this.#lastMeasureMs = now;
   }
