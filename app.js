@@ -355,6 +355,39 @@ const RADAR_PRODUCT_KDP = 'RADAR_KDP';
 const RADAR_PRODUCT_RADIAL_VELOCITY = 'RADAR_RADIAL_VELOCITY';
 const RADAR_PANEL_MODE_COMPOSITE = 'RADAR_PANEL_MODE_COMPOSITE';
 const RADAR_PANEL_MODE_SINGLE_STATION = 'RADAR_PANEL_MODE_SINGLE_STATION';
+const RADAR_MAX_RENDER_SITES = 16;
+
+const RADAR_TYPE_PRESETS = Object.freeze({
+  X : Object.freeze({
+    rangeKm : 80,
+    resolutionKm : 0.1,
+    attenuation : 1.6,
+    refreshSec : 1,
+    beamWidthDeg : 0.5,
+  }),
+  C : Object.freeze({
+    rangeKm : 250,
+    resolutionKm : 0.5,
+    attenuation : 0.8,
+    refreshSec : 2,
+    beamWidthDeg : 1.0,
+  }),
+  S : Object.freeze({
+    rangeKm : 500,
+    resolutionKm : 2.0,
+    attenuation : 0.35,
+    refreshSec : 4,
+    beamWidthDeg : 0.8,
+  }),
+});
+
+const RADAR_PARAM_LIMITS = Object.freeze({
+  rangeKm : Object.freeze({min : 1.0, max : 1000.0, step : 1.0}),
+  resolutionKm : Object.freeze({min : 0.01, max : 50.0, step : 0.01}),
+  attenuation : Object.freeze({min : 0.0, max : 50.0, step : 0.01}),
+  refreshSec : Object.freeze({min : 0.01, max : 120.0, step : 0.01}),
+  beamWidthDeg : Object.freeze({min : 0.01, max : 90.0, step : 0.01}),
+});
 
 const RADAR_PRODUCTS = Object.freeze([
   {
@@ -440,6 +473,30 @@ function clampNumber(value, min, max)
 function clampByte(value)
 {
   return Math.round(clampNumber(value, 0, 255));
+}
+
+function getRadarTypePreset(type)
+{
+  return RADAR_TYPE_PRESETS[type] || RADAR_TYPE_PRESETS.C;
+}
+
+function getEffectiveRadarSettings(rawSettings)
+{
+  const settings = rawSettings || {};
+  const preset = getRadarTypePreset(settings.radarType);
+  const useCustom = settings.radarType == 'CUSTOM';
+  const customOrPreset = function(customValue, presetValue) {
+    const parsed = Number(useCustom ? customValue : presetValue);
+    return Number.isFinite(parsed) ? parsed : presetValue;
+  };
+
+  return {
+    rangeKm : clampNumber(customOrPreset(settings.customRangeKm, preset.rangeKm), RADAR_PARAM_LIMITS.rangeKm.min, RADAR_PARAM_LIMITS.rangeKm.max),
+    resolutionKm : clampNumber(customOrPreset(settings.customResolutionKm, preset.resolutionKm), RADAR_PARAM_LIMITS.resolutionKm.min, RADAR_PARAM_LIMITS.resolutionKm.max),
+    attenuation : clampNumber(customOrPreset(settings.customAttenuation, preset.attenuation), RADAR_PARAM_LIMITS.attenuation.min, RADAR_PARAM_LIMITS.attenuation.max),
+    refreshSec : clampNumber(customOrPreset(settings.customRefreshSec, preset.refreshSec), RADAR_PARAM_LIMITS.refreshSec.min, RADAR_PARAM_LIMITS.refreshSec.max),
+    beamWidthDeg : clampNumber(customOrPreset(settings.customBeamWidthDeg, preset.beamWidthDeg), RADAR_PARAM_LIMITS.beamWidthDeg.min, RADAR_PARAM_LIMITS.beamWidthDeg.max),
+  };
 }
 
 function getBuiltinRadarPaletteId(productId)
@@ -1013,6 +1070,7 @@ const guiControls_default = {
   reflectivityGain : 0.0,
   reflectivityBoost : 10000.0,
   reflectivityPixelSize : 8,
+  radarShowRangeRings : false,
   rhohvBackground : true,
   debugRhohv : false,
   rhohvPixelSize : 8,
@@ -1850,6 +1908,7 @@ class Weatherstation
     this.#mainDiv.style.position = 'absolute';
     this.#mainDiv.style.width = '0px';
     this.#mainDiv.style.height = '0px';
+    this.#mainDiv.style.zIndex = 2;
 
     this.#c = this.#canvas.getContext('2d');
 
@@ -2204,6 +2263,8 @@ let radarTowerIconLoadPromise = null;
 let radarTowerIdCounter = 0;
 var selectedRadarTowerId = null;
 var radarPanelModeForMarkers = RADAR_PANEL_MODE_SINGLE_STATION;
+let radarRangeOverlayCanvas = null;
+let radarRangeOverlayCtx = null;
 var radarTowerSelectionBridge = null;
 var radarTowerRemovedBridge = null;
 var radarTowerToolClickBridge = null;
@@ -2323,11 +2384,274 @@ function handleRadarTowerToolClickFromMarker(towerId)
   handleRadarTowerSelectionFromMarker(towerId);
 }
 
+function ensureRadarRangeOverlay()
+{
+  if (radarRangeOverlayCanvas)
+    return;
+
+  radarRangeOverlayCanvas = document.createElement('canvas');
+  radarRangeOverlayCanvas.style.position = 'fixed';
+  radarRangeOverlayCanvas.style.left = '0px';
+  radarRangeOverlayCanvas.style.top = '0px';
+  radarRangeOverlayCanvas.style.zIndex = 1;
+  radarRangeOverlayCanvas.style.pointerEvents = 'none';
+  radarRangeOverlayCanvas.style.display = 'none';
+  document.body.appendChild(radarRangeOverlayCanvas);
+  radarRangeOverlayCtx = radarRangeOverlayCanvas.getContext('2d');
+}
+
+function getSimDomainScreenRect()
+{
+  const leftEdge = simToScreenX(-0.5);
+  const rightEdge = simToScreenX(sim_res_x - 0.5);
+  const bottomEdge = simToScreenY(-0.5);
+  const topEdge = simToScreenY(sim_res_y - 0.5);
+  return {
+    left : Math.min(leftEdge, rightEdge),
+    right : Math.max(leftEdge, rightEdge),
+    top : Math.min(topEdge, bottomEdge),
+    bottom : Math.max(topEdge, bottomEdge),
+  };
+}
+
+function getRadarRangeCircle(tower)
+{
+  const effective = tower.getEffectiveSettings();
+  const rangeCells = effective.rangeKm * 1000.0 / Math.max(cellHeight, 0.000001);
+  const x = simToScreenX(tower.getXpos());
+  const y = simToScreenY(tower.getYpos());
+  return {
+    x,
+    y,
+    r : Math.abs(simToScreenX(tower.getXpos() + rangeCells) - x),
+  };
+}
+
+function getWrappedRadarRangeCircles(towers, domainRect)
+{
+  const circles = [];
+  const domainWidth = Math.max(0, domainRect.right - domainRect.left);
+
+  for (const tower of towers) {
+    const baseCircle = getRadarRangeCircle(tower);
+    if (!(baseCircle.r > 1))
+      continue;
+
+    if (domainWidth <= 0) {
+      circles.push(baseCircle);
+      continue;
+    }
+
+    circles.push(baseCircle);
+
+    if (!guiControls.wrapHorizontally || !canvas) {
+      if (baseCircle.x + baseCircle.r > domainRect.right) {
+        circles.push({
+          x : baseCircle.x - domainWidth,
+          y : baseCircle.y,
+          r : baseCircle.r,
+        });
+      }
+
+      if (baseCircle.x - baseCircle.r < domainRect.left) {
+        circles.push({
+          x : baseCircle.x + domainWidth,
+          y : baseCircle.y,
+          r : baseCircle.r,
+        });
+      }
+      continue;
+    }
+
+    const minCopy = Math.floor((0 - (baseCircle.x + baseCircle.r)) / domainWidth) - 1;
+    const maxCopy = Math.ceil((canvas.width - (baseCircle.x - baseCircle.r)) / domainWidth) + 1;
+
+    for (let copyIndex = minCopy; copyIndex <= maxCopy; copyIndex++) {
+      if (copyIndex == 0)
+        continue;
+      const shiftedX = baseCircle.x + copyIndex * domainWidth;
+      if (shiftedX + baseCircle.r < 0 || shiftedX - baseCircle.r > canvas.width)
+        continue;
+
+      circles.push({
+        x : shiftedX,
+        y : baseCircle.y,
+        r : baseCircle.r,
+      });
+    }
+  }
+
+  return circles;
+}
+
+function isPointInsideRadarOverlayDomain(x, y, domainRect)
+{
+  const insideVertical = y >= domainRect.top && y <= domainRect.bottom;
+  if (!insideVertical)
+    return false;
+  if (guiControls.wrapHorizontally && canvas)
+    return x >= 0 && x <= canvas.width;
+  return x >= domainRect.left && x <= domainRect.right;
+}
+
+function drawRadarRangeCircle(ctx, circles, alpha)
+{
+  if (!circles || circles.length == 0)
+    return;
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.strokeStyle = 'rgba(196, 204, 214, 0.88)';
+  ctx.lineWidth = 2;
+
+  for (let circleIndex = 0; circleIndex < circles.length; circleIndex++) {
+    const circle = circles[circleIndex];
+    const steps = Math.max(96, Math.min(720, Math.ceil(circle.r * 0.75)));
+    let drawingSegment = false;
+
+    ctx.beginPath();
+    for (let step = 0; step <= steps; step++) {
+      const angle = (step / steps) * Math.PI * 2;
+      const x = circle.x + Math.cos(angle) * circle.r;
+      const y = circle.y + Math.sin(angle) * circle.r;
+      let coveredBySibling = false;
+
+      for (let otherIndex = 0; otherIndex < circles.length; otherIndex++) {
+        if (otherIndex == circleIndex)
+          continue;
+        const other = circles[otherIndex];
+        const dx = x - other.x;
+        const dy = y - other.y;
+        if (dx * dx + dy * dy < (other.r - 1.0) * (other.r - 1.0)) {
+          coveredBySibling = true;
+          break;
+        }
+      }
+
+      if (!coveredBySibling) {
+        if (!drawingSegment) {
+          ctx.moveTo(x, y);
+          drawingSegment = true;
+        } else {
+          ctx.lineTo(x, y);
+        }
+      } else {
+        drawingSegment = false;
+      }
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawCompositeRadarCoverage(ctx, towers, domainRect)
+{
+  const circles = getWrappedRadarRangeCircles(towers, domainRect);
+  if (circles.length == 0)
+    return;
+
+  ctx.save();
+  ctx.strokeStyle = 'rgba(196, 204, 214, 0.72)';
+  ctx.lineWidth = 2;
+
+  for (let circleIndex = 0; circleIndex < circles.length; circleIndex++) {
+    const circle = circles[circleIndex];
+    const steps = Math.max(96, Math.min(720, Math.ceil(circle.r * 0.75)));
+    let drawingSegment = false;
+
+    ctx.beginPath();
+    for (let step = 0; step <= steps; step++) {
+      const angle = (step / steps) * Math.PI * 2;
+      const x = circle.x + Math.cos(angle) * circle.r;
+      const y = circle.y + Math.sin(angle) * circle.r;
+      const insideDomain = isPointInsideRadarOverlayDomain(x, y, domainRect);
+      let coveredByOther = false;
+
+      if (insideDomain) {
+        for (let otherIndex = 0; otherIndex < circles.length; otherIndex++) {
+          if (otherIndex == circleIndex)
+            continue;
+          const other = circles[otherIndex];
+          const dx = x - other.x;
+          const dy = y - other.y;
+          if (dx * dx + dy * dy < (other.r - 1.0) * (other.r - 1.0)) {
+            coveredByOther = true;
+            break;
+          }
+        }
+      }
+
+      if (insideDomain && !coveredByOther) {
+        if (!drawingSegment) {
+          ctx.moveTo(x, y);
+          drawingSegment = true;
+        } else {
+          ctx.lineTo(x, y);
+        }
+      } else {
+        drawingSegment = false;
+      }
+    }
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+function drawRadarRangeOverlay()
+{
+  ensureRadarRangeOverlay();
+
+  if (!radarRangeOverlayCtx || !canvas || !guiControls || !guiControls.radarShowRangeRings) {
+    if (radarRangeOverlayCanvas)
+      radarRangeOverlayCanvas.style.display = 'none';
+    return;
+  }
+
+  if (radarRangeOverlayCanvas.width != canvas.width)
+    radarRangeOverlayCanvas.width = canvas.width;
+  if (radarRangeOverlayCanvas.height != canvas.height)
+    radarRangeOverlayCanvas.height = canvas.height;
+
+  radarRangeOverlayCanvas.style.width = canvas.width + 'px';
+  radarRangeOverlayCanvas.style.height = canvas.height + 'px';
+  radarRangeOverlayCanvas.style.display = 'block';
+
+  const ctx = radarRangeOverlayCtx;
+  ctx.clearRect(0, 0, radarRangeOverlayCanvas.width, radarRangeOverlayCanvas.height);
+
+  const domainRect = getSimDomainScreenRect();
+  const domainWidth = Math.max(0, domainRect.right - domainRect.left);
+  const domainHeight = Math.max(0, domainRect.bottom - domainRect.top);
+  if (domainWidth <= 0 || domainHeight <= 0)
+    return;
+
+  ctx.save();
+  ctx.beginPath();
+  if (guiControls.wrapHorizontally && canvas)
+    ctx.rect(0, domainRect.top, canvas.width, domainHeight);
+  else
+    ctx.rect(domainRect.left, domainRect.top, domainWidth, domainHeight);
+  ctx.clip();
+
+  if (radarPanelModeForMarkers == RADAR_PANEL_MODE_SINGLE_STATION) {
+    const selectedTower = radarTowers.find((tower) => tower.getId() == selectedRadarTowerId);
+    if (selectedTower && !selectedTower.isHiddenForOverlay())
+      drawRadarRangeCircle(ctx, getWrappedRadarRangeCircles([ selectedTower ], domainRect), 0.95);
+  } else {
+    const enabledTowers = radarTowers.filter((tower) => tower.isEnabled() && !tower.isHiddenForOverlay());
+    drawCompositeRadarCoverage(ctx, enabledTowers, domainRect);
+  }
+
+  ctx.restore();
+}
+
 class RadarTower
 {
   #width = 96;
   #height = 120;
   #mainDiv;
+  #rangeRingDiv;
   #canvas;
   #ctx;
   #x;
@@ -2349,18 +2673,20 @@ class RadarTower
     this.#code = 'R' + String(radarTowerIdCounter).padStart(2, '0');
     this.#settings = {
       name : this.#code,
-      radarType : 'S',
+      radarType : 'C',
       enabled : true,
-      customRangeKm : 150,
-      customResolutionKm : 1,
-      customAttenuation : 0.5,
+      customRangeKm : RADAR_TYPE_PRESETS.C.rangeKm,
+      customResolutionKm : RADAR_TYPE_PRESETS.C.resolutionKm,
+      customAttenuation : RADAR_TYPE_PRESETS.C.attenuation,
       customRefreshSec : 2,
-      customBeamWidthDeg : 1,
+      customBeamWidthDeg : RADAR_TYPE_PRESETS.C.beamWidthDeg,
     };
     this.#x = Math.floor(xIn);
     this.#y = Math.floor(yIn);
     this.#mainDiv = document.createElement('div');
+    this.#rangeRingDiv = document.createElement('div');
     this.#canvas = document.createElement('canvas');
+    this.#mainDiv.appendChild(this.#rangeRingDiv);
     this.#mainDiv.appendChild(this.#canvas);
     document.body.appendChild(this.#mainDiv);
     this.#canvas.height = this.#height;
@@ -2371,6 +2697,15 @@ class RadarTower
     this.#mainDiv.style.height = '0px';
 
     this.#ctx = this.#canvas.getContext('2d');
+
+    this.#rangeRingDiv.style.position = 'absolute';
+    this.#rangeRingDiv.style.zIndex = 0;
+    this.#rangeRingDiv.style.pointerEvents = 'none';
+    this.#rangeRingDiv.style.display = 'none';
+    this.#rangeRingDiv.style.border = '2px solid rgba(196, 204, 214, 0.46)';
+    this.#rangeRingDiv.style.borderRadius = '50%';
+    this.#rangeRingDiv.style.boxSizing = 'border-box';
+    this.#rangeRingDiv.style.boxShadow = '0 0 16px rgba(6, 17, 38, 0.18)';
 
     this.#canvas.style.position = 'absolute';
     this.#canvas.style.zIndex = 1;
@@ -2470,6 +2805,7 @@ class RadarTower
     const screenY = baseScreenY - this.#height;
     this.#mainDiv.style.left = Math.round(screenX) + 'px';
     this.#mainDiv.style.top = Math.round(screenY) + 'px';
+    this.#updateRangeRing(screenX, screenY);
 
     c.clearRect(0, 0, this.#width, this.#height);
     c.fillStyle = '#00000000';
@@ -2551,6 +2887,14 @@ class RadarTower
     }
   }
 
+  #updateRangeRing(markerScreenX, markerScreenY)
+  {
+    if (!this.#rangeRingDiv)
+      return;
+
+    this.#rangeRingDiv.style.display = 'none';
+  }
+
   setHidden(hidden)
   {
     this.#hideBadge = !!hidden;
@@ -2595,6 +2939,9 @@ class RadarTower
   getId() { return this.#id; }
   getCode() { return this.#code; }
   getSettings() { return this.#settings; }
+  isEnabled() { return this.#settings.enabled !== false; }
+  isHiddenForOverlay() { return this.#hideBadge; }
+  getEffectiveSettings() { return getEffectiveRadarSettings(this.#settings); }
 
   setName(nextName)
   {
@@ -5594,6 +5941,78 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   radarPanelModeForMarkers = radarPanelMode;
   selectedRadarTowerId = null;
 
+  function getRadarProductRenderMode(displayMode)
+  {
+    if (displayMode == 'DISP_REFLECTIVITY')
+      return 0;
+    if (displayMode == 'DISP_RHOHV')
+      return 1;
+    if (displayMode == 'DISP_ZDR')
+      return 2;
+    return -1;
+  }
+
+  function getEnabledRadarTowers()
+  {
+    return radarTowers.filter((tower) => tower.isEnabled());
+  }
+
+  function getPolarRadarRenderTowers()
+  {
+    if (radarPanelMode == RADAR_PANEL_MODE_SINGLE_STATION) {
+      const selectedRadarTower = getSelectedRadarTower();
+      return selectedRadarTower ? [ selectedRadarTower ] : [];
+    }
+
+    return getEnabledRadarTowers().slice(0, RADAR_MAX_RENDER_SITES);
+  }
+
+  function shouldUsePolarRadarRenderer(displayMode)
+  {
+    if (!getRadarProductIdForDisplayMode(displayMode))
+      return false;
+    return getPolarRadarRenderTowers().length > 0;
+  }
+
+  function getRadarProductPixelSize(displayMode)
+  {
+    if (displayMode == 'DISP_RHOHV')
+      return Math.max(1.0, Math.round(guiControls.rhohvPixelSize));
+    if (displayMode == 'DISP_ZDR')
+      return Math.max(1.0, Math.round(guiControls.zdrPixelSize));
+    return Math.max(1.0, Math.round(guiControls.reflectivityPixelSize));
+  }
+
+  function buildPolarRadarUniformData(towers)
+  {
+    const sites = new Float32Array(RADAR_MAX_RENDER_SITES * 4);
+    const params = new Float32Array(RADAR_MAX_RENDER_SITES * 4);
+
+    for (let index = 0; index < towers.length && index < RADAR_MAX_RENDER_SITES; index++) {
+      const tower = towers[index];
+      const effective = tower.getEffectiveSettings();
+      const rangeBinKm = effective.resolutionKm;
+      const beamWidthDeg = effective.beamWidthDeg;
+      const offset = index * 4;
+
+      sites[offset + 0] = (tower.getXpos() + 0.5) / sim_res_x;
+      sites[offset + 1] = (tower.getYpos() + 0.5) / sim_res_y;
+      sites[offset + 2] = effective.rangeKm;
+      sites[offset + 3] = Math.max(0.01, rangeBinKm);
+
+      params[offset + 0] = Math.max(0.05, beamWidthDeg);
+      params[offset + 1] = effective.attenuation;
+      params[offset + 2] = effective.refreshSec;
+      params[offset + 3] = 0.0;
+    }
+
+    return {
+      count : Math.min(towers.length, RADAR_MAX_RENDER_SITES),
+      sites,
+      params,
+    };
+  }
+
   function formatRadarUiNumber(value, digits = 2)
   {
     return Number(value).toFixed(digits).replace(/\.?0+$/, '');
@@ -5838,9 +6257,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       appendRadarRangeControl(radarTowerPopupBodyEl, {
         label : 'Range (km)',
         description : 'Placeholder custom range.',
-        min : 10,
-        max : 400,
-        step : 1,
+        min : RADAR_PARAM_LIMITS.rangeKm.min,
+        max : RADAR_PARAM_LIMITS.rangeKm.max,
+        step : RADAR_PARAM_LIMITS.rangeKm.step,
         getValue : function() { return settings.customRangeKm; },
         formatValue : function(value) { return Math.round(value).toString(); },
         onInput : function(value) { tower.setCustomRangeKm(Math.round(value)); },
@@ -5849,20 +6268,20 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       appendRadarRangeControl(radarTowerPopupBodyEl, {
         label : 'Resolution (km)',
         description : 'Placeholder radar bin size.',
-        min : 0.1,
-        max : 5,
-        step : 0.1,
+        min : RADAR_PARAM_LIMITS.resolutionKm.min,
+        max : RADAR_PARAM_LIMITS.resolutionKm.max,
+        step : RADAR_PARAM_LIMITS.resolutionKm.step,
         getValue : function() { return settings.customResolutionKm; },
-        formatValue : function(value) { return formatRadarUiNumber(value, 1); },
+        formatValue : function(value) { return formatRadarUiNumber(value, 2); },
         onInput : function(value) { tower.setCustomResolutionKm(value); },
       });
 
       appendRadarRangeControl(radarTowerPopupBodyEl, {
         label : 'Attenuation',
         description : 'Placeholder signal attenuation.',
-        min : 0,
-        max : 5,
-        step : 0.01,
+        min : RADAR_PARAM_LIMITS.attenuation.min,
+        max : RADAR_PARAM_LIMITS.attenuation.max,
+        step : RADAR_PARAM_LIMITS.attenuation.step,
         getValue : function() { return settings.customAttenuation; },
         formatValue : function(value) { return formatRadarUiNumber(value, 2); },
         onInput : function(value) { tower.setCustomAttenuation(value); },
@@ -5871,22 +6290,22 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       appendRadarRangeControl(radarTowerPopupBodyEl, {
         label : 'Refresh Rate (s)',
         description : 'Placeholder per-radar refresh.',
-        min : 0.1,
-        max : 20,
-        step : 0.1,
+        min : RADAR_PARAM_LIMITS.refreshSec.min,
+        max : RADAR_PARAM_LIMITS.refreshSec.max,
+        step : RADAR_PARAM_LIMITS.refreshSec.step,
         getValue : function() { return settings.customRefreshSec; },
-        formatValue : function(value) { return formatRadarUiNumber(value, 1); },
+        formatValue : function(value) { return formatRadarUiNumber(value, 2); },
         onInput : function(value) { tower.setCustomRefreshSec(value); },
       });
 
       appendRadarRangeControl(radarTowerPopupBodyEl, {
         label : 'Beam Width (deg)',
         description : 'Placeholder beam width.',
-        min : 0.1,
-        max : 8,
-        step : 0.1,
+        min : RADAR_PARAM_LIMITS.beamWidthDeg.min,
+        max : RADAR_PARAM_LIMITS.beamWidthDeg.max,
+        step : RADAR_PARAM_LIMITS.beamWidthDeg.step,
         getValue : function() { return settings.customBeamWidthDeg; },
-        formatValue : function(value) { return formatRadarUiNumber(value, 1); },
+        formatValue : function(value) { return formatRadarUiNumber(value, 2); },
         onInput : function(value) { tower.setCustomBeamWidthDeg(value); },
       });
     }
@@ -6477,6 +6896,13 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     }
 
     appendRadarPaletteControls(radarSettingsContentEl, product.id);
+    appendRadarToggleControl(
+      radarSettingsContentEl,
+      'Range Rings',
+      'Show gray radar range circles: selected site in single-station, enabled sites in composite.',
+      guiControls.radarShowRangeRings,
+      function(checked) { guiControls.radarShowRangeRings = checked; }
+    );
 
     if (product.id == RADAR_PRODUCT_REFLECTIVITY) {
       appendRadarToggleControl(
@@ -7964,6 +8390,7 @@ var soundingGraph = {
   const zdrFieldShader = await loadShader('zdrFieldShader.frag');
   const zdrDisplayShader = await loadShader('zdrDisplayShader.frag');
   const universalDisplayShader = await loadShader('universalDisplayShader.frag');
+  const radarPolarDisplayShader = await loadShader('radarPolarDisplayShader.frag');
   const skyBackgroundDisplayShader = await loadShader('skyBackgroundDisplayShader.frag');
   const realisticDisplayShader = await loadShader('realisticDisplayShader.frag');
   const IRtempDisplayShader = await loadShader('IRtempDisplayShader.frag');
@@ -7997,6 +8424,7 @@ var soundingGraph = {
   const zdrFieldProgram = createProgram(simVertexShader, zdrFieldShader);
   const zdrDisplayProgram = createProgram(dispVertexShader, zdrDisplayShader);
   const universalDisplayProgram = createProgram(dispVertexShader, universalDisplayShader);
+  const radarPolarDisplayProgram = createProgram(dispVertexShader, radarPolarDisplayShader);
   skyBackgroundDisplayProgram = createProgram(realDispVertexShader, skyBackgroundDisplayShader);
   realisticDisplayProgram = createProgram(realDispVertexShader, realisticDisplayShader);
   const IRtempDisplayProgram = createProgram(dispVertexShader, IRtempDisplayShader);
@@ -8696,6 +9124,56 @@ var soundingGraph = {
     radarNeedsMeasure = true; // trigger radar updates after new snapshot
   }
 
+  function bindRadarProductTextureForDisplayMode(displayMode)
+  {
+    gl.activeTexture(gl.TEXTURE4);
+    if (displayMode == 'DISP_RHOHV') {
+      gl.bindTexture(gl.TEXTURE_2D, rhohvSnapshotTex);
+    } else if (displayMode == 'DISP_ZDR') {
+      gl.bindTexture(gl.TEXTURE_2D, zdrSnapshotTex);
+    } else {
+      gl.bindTexture(gl.TEXTURE_2D, reflectivitySnapshotTex);
+    }
+  }
+
+  function setupPolarRadarDisplay(displayMode, cursorType, productOpaque)
+  {
+    const productId = getRadarProductIdForDisplayMode(displayMode);
+    const productMode = getRadarProductRenderMode(displayMode);
+    const towers = getPolarRadarRenderTowers();
+    if (!productId || productMode < 0 || towers.length == 0)
+      return false;
+
+    const uniformData = buildPolarRadarUniformData(towers);
+
+    gl.useProgram(radarPolarDisplayProgram);
+    gl.uniform2f(gl.getUniformLocation(radarPolarDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
+    gl.uniform3f(gl.getUniformLocation(radarPolarDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
+    gl.uniform4f(gl.getUniformLocation(radarPolarDisplayProgram, 'cursor'), mouseXinSim, mouseYinSim, guiControls.brushSize * 0.5, cursorType);
+    gl.uniform1f(gl.getUniformLocation(radarPolarDisplayProgram, 'Xmult'), horizontalDisplayMult);
+    gl.uniform1i(gl.getUniformLocation(radarPolarDisplayProgram, 'productMode'), productMode);
+    gl.uniform1i(gl.getUniformLocation(radarPolarDisplayProgram, 'productOpaque'), productOpaque ? 1 : 0);
+    gl.uniform1f(gl.getUniformLocation(radarPolarDisplayProgram, 'productAlpha'), 0.76);
+    gl.uniform1f(gl.getUniformLocation(radarPolarDisplayProgram, 'reflMult'), guiControls.reflectivityGain);
+    gl.uniform1f(gl.getUniformLocation(radarPolarDisplayProgram, 'reflBoost'), guiControls.reflectivityBoost);
+    gl.uniform1f(gl.getUniformLocation(radarPolarDisplayProgram, 'simHeightKm'), guiControls.simHeight / 1000.0);
+    gl.uniform1i(gl.getUniformLocation(radarPolarDisplayProgram, 'wrapHorizontally'), guiControls.wrapHorizontally ? 1 : 0);
+    gl.uniform1i(gl.getUniformLocation(radarPolarDisplayProgram, 'compositeMode'), radarPanelMode == RADAR_PANEL_MODE_COMPOSITE ? 1 : 0);
+    gl.uniform1f(gl.getUniformLocation(radarPolarDisplayProgram, 'compositePixelSize'), getRadarProductPixelSize(displayMode));
+    gl.uniform1i(gl.getUniformLocation(radarPolarDisplayProgram, 'radarCount'), uniformData.count);
+    gl.uniform4fv(gl.getUniformLocation(radarPolarDisplayProgram, 'radarSites[0]'), uniformData.sites);
+    gl.uniform4fv(gl.getUniformLocation(radarPolarDisplayProgram, 'radarParams[0]'), uniformData.params);
+    applyRadarPaletteUniforms(radarPolarDisplayProgram, productId);
+
+    gl.activeTexture(gl.TEXTURE0 + RADAR_PALETTE_TEXTURE_UNIT);
+    gl.bindTexture(gl.TEXTURE_2D, radarPaletteTexture);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, wallTexture_1);
+    bindRadarProductTextureForDisplayMode(displayMode);
+
+    return true;
+  }
+
   // Set up Framebuffers
 
 
@@ -9152,6 +9630,13 @@ var soundingGraph = {
   gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'phaseStatsTex'), 6);
   gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'radarMomentsTex'), 7);
   gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'radarPaletteTex'), RADAR_PALETTE_TEXTURE_UNIT);
+
+  gl.useProgram(radarPolarDisplayProgram);
+  gl.uniform2f(gl.getUniformLocation(radarPolarDisplayProgram, 'resolution'), sim_res_x, sim_res_y);
+  gl.uniform2f(gl.getUniformLocation(radarPolarDisplayProgram, 'texelSize'), texelSizeX, texelSizeY);
+  gl.uniform1i(gl.getUniformLocation(radarPolarDisplayProgram, 'productTex'), 4);
+  gl.uniform1i(gl.getUniformLocation(radarPolarDisplayProgram, 'wallTex'), 2);
+  gl.uniform1i(gl.getUniformLocation(radarPolarDisplayProgram, 'radarPaletteTex'), RADAR_PALETTE_TEXTURE_UNIT);
 
   gl.useProgram(realisticDisplayProgram);
   gl.uniform2f(gl.getUniformLocation(realisticDisplayProgram, 'resolution'), sim_res_x, sim_res_y);
@@ -9745,6 +10230,7 @@ var soundingGraph = {
 
     // render to canvas
     const isRadarProductMode = !!getRadarProductIdForDisplayMode(guiControls.displayMode);
+    const usePolarRadarRenderer = shouldUsePolarRadarRenderer(guiControls.displayMode);
     const overlayRadarProduct = isRadarProductMode && !getRadarProductBackground(guiControls.displayMode);
     const displayModeEffective = overlayRadarProduct ? 'DISP_REAL' : guiControls.displayMode;
 
@@ -10026,6 +10512,8 @@ var soundingGraph = {
         gl.drawArrays(gl.POINTS, 0, NUM_DROPLETS);
         gl.bindVertexArray(fluidVao);
         gl.disable(gl.BLEND);
+      } else if (usePolarRadarRenderer && getRadarProductIdForDisplayMode(displayModeEffective)) {
+        setupPolarRadarDisplay(displayModeEffective, cursorType, getRadarProductBackground(displayModeEffective));
       } else if (displayModeEffective == 'DISP_TEMPERATURE') {
         gl.useProgram(temperatureDisplayProgram);
         gl.uniform2f(gl.getUniformLocation(temperatureDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
@@ -10211,7 +10699,9 @@ var soundingGraph = {
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
-      if (guiControls.displayMode == 'DISP_REFLECTIVITY') {
+      if (usePolarRadarRenderer) {
+        setupPolarRadarDisplay(guiControls.displayMode, cursorType, false);
+      } else if (guiControls.displayMode == 'DISP_REFLECTIVITY') {
         gl.useProgram(universalDisplayProgram);
         gl.uniform2f(gl.getUniformLocation(universalDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
         gl.uniform3f(gl.getUniformLocation(universalDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
@@ -10278,6 +10768,7 @@ var soundingGraph = {
       weatherStations[i].updateCanvas(); // update weather stations
     }
   }
+  drawRadarRangeOverlay();
   for (i = 0; i < radarTowers.length; i++) {
     radarTowers[i].updateCanvas(); // keep position synced with camera
   }
