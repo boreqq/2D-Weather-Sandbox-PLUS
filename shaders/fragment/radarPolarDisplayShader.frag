@@ -152,11 +152,121 @@ bool colorFromProduct(vec4 sampleValue, out vec4 color, out float score)
   return true;
 }
 
+bool getProductSignal(vec4 sampleValue, out float score, out float reliability)
+{
+  if (productMode == 0) {
+    float zhLinear = max(sampleValue.r, 0.0);
+    float zRaw = sqrt(zhLinear) * reflMult + zhLinear * reflBoost;
+    float echoMask = smoothstep(0.00005, 0.00150, zRaw);
+    if (echoMask <= 0.0)
+      return false;
+
+    score = 4.3429448 * log(zRaw + 1e-6);
+    reliability = echoMask;
+    return true;
+  }
+
+  if (sampleValue.a <= 0.0)
+    return false;
+
+  reliability = clamp(sampleValue.a, 0.0, 1.0);
+  if (productMode == 1) {
+    score = sampleValue.a + clamp(sampleValue.r, radarPaletteRange.x, radarPaletteRange.y) * 0.001;
+    return true;
+  }
+
+  score = sampleValue.a + abs(clamp(sampleValue.r, radarPaletteRange.x, radarPaletteRange.y)) * 0.001;
+  return true;
+}
+
+float getCompositeRadarQuality(float rangeKm, float rangeBinKm, float beamWidthRad, float maxRangeKm, float attenuation, float reliability)
+{
+  float rangeNorm = clamp(rangeKm / max(maxRangeKm, 0.01), 0.0, 1.0);
+  float edgeScore = 1.0 - smoothstep(0.82, 1.0, rangeNorm);
+  float rangeScore = mix(1.0, 0.45, rangeNorm);
+  float effectiveBinKm = max(max(rangeBinKm, rangeKm * beamWidthRad), 0.05);
+  float resolutionScore = 1.0 / pow(effectiveBinKm, 1.15);
+  float attenuationScore = 1.0 / (1.0 + max(attenuation, 0.0) * rangeNorm * rangeNorm * 0.12);
+  return reliability * edgeScore * rangeScore * resolutionScore * attenuationScore;
+}
+
 void main()
 {
+  if (compositeMode) {
+    float bestQuality = 0.0;
+
+    for (int i = 0; i < 16; i++) {
+      if (i >= radarCount)
+        break;
+
+      vec2 sampleCoord;
+      float rangeKm;
+      float rangeBinKm;
+      float angleRad;
+      float beamWidthRad;
+
+      if (!getPolarSample(i, sampleCoord, rangeKm, rangeBinKm, angleRad, beamWidthRad))
+        continue;
+
+      vec4 sampleValue = texture(productTex, sampleCoord);
+      float productScore;
+      float reliability;
+      if (!getProductSignal(sampleValue, productScore, reliability))
+        continue;
+
+      float quality = getCompositeRadarQuality(rangeKm, rangeBinKm, beamWidthRad, radarSites[i].z, radarParams[i].y, reliability);
+      bestQuality = max(bestQuality, quality);
+    }
+
+    if (bestQuality <= 0.0)
+      discard;
+
+    vec4 weightedSample = vec4(0.0);
+    float totalWeight = 0.0;
+    float qualityCutoff = bestQuality * 0.40;
+
+    for (int i = 0; i < 16; i++) {
+      if (i >= radarCount)
+        break;
+
+      vec2 sampleCoord;
+      float rangeKm;
+      float rangeBinKm;
+      float angleRad;
+      float beamWidthRad;
+
+      if (!getPolarSample(i, sampleCoord, rangeKm, rangeBinKm, angleRad, beamWidthRad))
+        continue;
+
+      vec4 sampleValue = texture(productTex, sampleCoord);
+      float productScore;
+      float reliability;
+      if (!getProductSignal(sampleValue, productScore, reliability))
+        continue;
+
+      float quality = getCompositeRadarQuality(rangeKm, rangeBinKm, beamWidthRad, radarSites[i].z, radarParams[i].y, reliability);
+      if (quality < qualityCutoff)
+        continue;
+
+      weightedSample += sampleValue * quality;
+      totalWeight += quality;
+    }
+
+    if (totalWeight <= 0.0)
+      discard;
+
+    vec4 productColor;
+    float productScore;
+    if (!colorFromProduct(weightedSample / totalWeight, productColor, productScore))
+      discard;
+
+    fragmentColor = productColor;
+    drawCursor(cursor, view);
+    return;
+  }
+
   vec4 bestColor = vec4(0.0);
   float bestScore = -1e20;
-  float bestRangeKm = 1e20;
 
   for (int i = 0; i < 16; i++) {
     if (i >= radarCount)
@@ -177,11 +287,8 @@ void main()
     if (!colorFromProduct(sampleValue, productColor, productScore))
       continue;
 
-    bool betterCompositeSite = compositeMode && rangeKm < bestRangeKm;
-    bool betterSingleSiteValue = !compositeMode && productScore > bestScore;
-    if (betterCompositeSite || betterSingleSiteValue) {
+    if (productScore > bestScore) {
       bestScore = productScore;
-      bestRangeKm = rangeKm;
       bestColor = productColor;
     }
   }
