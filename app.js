@@ -6026,8 +6026,15 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   function getVisibleRadarProductsForPanelMode()
   {
-    if (radarPanelMode == RADAR_PANEL_MODE_COMPOSITE)
+    if (radarPanelMode == RADAR_PANEL_MODE_COMPOSITE) {
+      if (getEnabledRadarTowers().length == 0) {
+        return RADAR_PRODUCTS.filter((product) =>
+          product.id != RADAR_PRODUCT_RADIAL_VELOCITY &&
+          product.id != RADAR_PRODUCT_KDP
+        );
+      }
       return RADAR_PRODUCTS.filter((product) => product.id == RADAR_PRODUCT_REFLECTIVITY);
+    }
     return RADAR_PRODUCTS;
   }
 
