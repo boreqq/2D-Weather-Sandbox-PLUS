@@ -361,21 +361,21 @@ const RADAR_TYPE_PRESETS = Object.freeze({
   X : Object.freeze({
     rangeKm : 80,
     resolutionKm : 0.1,
-    attenuation : 1.6,
+    attenuation : 30,
     refreshSec : 1,
     beamWidthDeg : 0.5,
   }),
   C : Object.freeze({
     rangeKm : 250,
     resolutionKm : 0.5,
-    attenuation : 0.8,
+    attenuation : 15,
     refreshSec : 2,
     beamWidthDeg : 1.0,
   }),
   S : Object.freeze({
     rangeKm : 500,
     resolutionKm : 2.0,
-    attenuation : 0.35,
+    attenuation : 5,
     refreshSec : 4,
     beamWidthDeg : 0.8,
   }),
@@ -1071,6 +1071,7 @@ const guiControls_default = {
   reflectivityBoost : 10000.0,
   reflectivityPixelSize : 8,
   radarShowRangeRings : false,
+  radarAttenuationEnabled : true,
   rhohvBackground : true,
   debugRhohv : false,
   rhohvPixelSize : 8,
@@ -5833,6 +5834,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       })
       .name('Radar refresh (s)')
       .listen();
+    radar_folder.add(guiControls, 'radarAttenuationEnabled')
+      .onChange(handleRadarUiExternalChange)
+      .name('Radar attenuation')
+      .listen();
 
     var reflectivity_folder = datGui.addFolder('Reflectivity');
     reflectivity_folder.add(guiControls, 'reflectivityBackground').onChange(handleRadarUiExternalChange).name('Reflectivity Background').listen();
@@ -6918,6 +6923,13 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     );
 
     if (product.id == RADAR_PRODUCT_REFLECTIVITY) {
+      appendRadarToggleControl(
+        radarSettingsContentEl,
+        'Attenuation',
+        'Attenuate bins hidden behind stronger echo along the radar beam.',
+        guiControls.radarAttenuationEnabled,
+        function(checked) { guiControls.radarAttenuationEnabled = checked; }
+      );
       appendRadarToggleControl(
         radarSettingsContentEl,
         'Background',
@@ -9265,6 +9277,7 @@ var soundingGraph = {
     gl.uniform1f(gl.getUniformLocation(radarPolarDisplayProgram, 'simHeightKm'), guiControls.simHeight / 1000.0);
     gl.uniform1i(gl.getUniformLocation(radarPolarDisplayProgram, 'wrapHorizontally'), guiControls.wrapHorizontally ? 1 : 0);
     gl.uniform1i(gl.getUniformLocation(radarPolarDisplayProgram, 'compositeMode'), radarPanelMode == RADAR_PANEL_MODE_COMPOSITE ? 1 : 0);
+    gl.uniform1i(gl.getUniformLocation(radarPolarDisplayProgram, 'attenuationEnabled'), guiControls.radarAttenuationEnabled ? 1 : 0);
     gl.uniform1f(gl.getUniformLocation(radarPolarDisplayProgram, 'compositePixelSize'), getRadarProductPixelSize(displayMode));
     gl.uniform1i(gl.getUniformLocation(radarPolarDisplayProgram, 'radarCount'), uniformData.count);
     gl.uniform4fv(gl.getUniformLocation(radarPolarDisplayProgram, 'radarSites[0]'), uniformData.sites);
