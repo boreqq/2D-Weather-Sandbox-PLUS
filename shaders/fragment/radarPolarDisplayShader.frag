@@ -22,6 +22,7 @@ uniform float radarPaletteRowCenter;
 uniform float simHeightKm;
 uniform bool wrapHorizontally;
 uniform bool compositeMode;
+uniform bool attenuationEnabled;
 uniform float compositePixelSize;
 uniform int radarCount;
 uniform vec4 radarSites[16];  // x, y, rangeKm, binKm
@@ -35,6 +36,7 @@ out vec4 fragmentColor;
 #include "commonDisplay.glsl"
 
 #define TAU 6.28318530717958647692
+#define ATTENUATION_STEPS 12
 
 vec4 sampleRadarPalette(float value)
 {
@@ -46,6 +48,37 @@ vec4 sampleRadarPalette(float value)
 float wrapDeltaX(float dx)
 {
   return dx - floor(dx + 0.5);
+}
+
+float getReflectivityRaw(vec4 sampleValue)
+{
+  float zhLinear = max(sampleValue.r, 0.0);
+  return max(sqrt(zhLinear) * reflMult + zhLinear * reflBoost, 0.0);
+}
+
+float getReflectivityDbz(vec4 sampleValue)
+{
+  return 4.3429448 * log(getReflectivityRaw(sampleValue) + 1e-6);
+}
+
+float getReflectivityEchoMask(vec4 sampleValue)
+{
+  return smoothstep(0.00005, 0.00150, getReflectivityRaw(sampleValue));
+}
+
+float getReflectivityLinearFromRaw(float zRaw)
+{
+  float targetRaw = max(zRaw, 0.0);
+  float gain = max(reflMult, 1e-6);
+  float boost = max(reflBoost, 0.0);
+
+  if (boost > 1e-6) {
+    float root = (-gain + sqrt(gain * gain + 4.0 * boost * targetRaw)) / (2.0 * boost);
+    return root * root;
+  }
+
+  float root = targetRaw / gain;
+  return root * root;
 }
 
 vec2 getCompositeSampleCoord()
@@ -60,6 +93,27 @@ vec2 getCompositeSampleCoord()
   if (wrapHorizontally)
     coord.x = fract(coord.x);
   return coord;
+}
+
+bool getRadarSampleCoord(int siteIndex, float sampleRangeKm, float sampleAngle, out vec2 sampleCoord)
+{
+  vec4 site = radarSites[siteIndex];
+  float cellKm = max(simHeightKm / max(resolution.y, 1.0), 1e-6);
+  float sampleRangeCells = sampleRangeKm / cellKm;
+  vec2 sampleOffset = vec2(cos(sampleAngle), sin(sampleAngle)) * sampleRangeCells / resolution;
+
+  sampleCoord = site.xy + sampleOffset;
+  if (wrapHorizontally) {
+    sampleCoord.x = fract(sampleCoord.x);
+  } else if (sampleCoord.x < 0.0 || sampleCoord.x > 1.0) {
+    return false;
+  }
+
+  if (sampleCoord.y < 0.0 || sampleCoord.y > 1.0)
+    return false;
+
+  ivec2 wall = texture(wallTex, sampleCoord).xy;
+  return wall.y != 0;
 }
 
 bool getPolarSample(int siteIndex, out vec2 sampleCoord, out float rangeKm, out float rangeBinKm, out float angleRad, out float beamWidthRad)
@@ -100,33 +154,68 @@ bool getPolarSample(int siteIndex, out vec2 sampleCoord, out float rangeKm, out 
   float beamBin = floor(angleRad / beamWidthRad);
   float sampleRangeKm = (rangeBin + 0.5) * rangeBinKm;
   float sampleAngle = (beamBin + 0.5) * beamWidthRad;
-  float sampleRangeCells = sampleRangeKm / cellKm;
-  vec2 sampleOffset = vec2(cos(sampleAngle), sin(sampleAngle)) * sampleRangeCells / resolution;
+  angleRad = sampleAngle;
+  return getRadarSampleCoord(siteIndex, sampleRangeKm, sampleAngle, sampleCoord);
+}
 
-  sampleCoord = site.xy + sampleOffset;
-  if (wrapHorizontally) {
-    sampleCoord.x = fract(sampleCoord.x);
-  } else if (sampleCoord.x < 0.0 || sampleCoord.x > 1.0) {
-    return false;
+float getPathAttenuationDb(int siteIndex, float rangeKm, float rangeBinKm, float angleRad, float radarAttenuation)
+{
+  if (!attenuationEnabled || productMode != 0 || radarAttenuation <= 0.0)
+    return 0.0;
+
+  float pathEndKm = rangeKm - rangeBinKm * 0.75;
+  if (pathEndKm <= 0.0)
+    return 0.0;
+
+  float stepKm = pathEndKm / float(ATTENUATION_STEPS);
+  float attenuationDb = 0.0;
+
+  for (int step = 0; step < ATTENUATION_STEPS; step++) {
+    float sampleRangeKm = (float(step) + 0.5) * stepKm;
+    if (sampleRangeKm >= pathEndKm)
+      break;
+
+    vec2 blockerCoord;
+    if (!getRadarSampleCoord(siteIndex, sampleRangeKm, angleRad, blockerCoord))
+      continue;
+
+    vec4 blockerSample = texture(productTex, blockerCoord);
+    float echoMask = getReflectivityEchoMask(blockerSample);
+    if (echoMask <= 0.0)
+      continue;
+
+    float blockerDbz = getReflectivityDbz(blockerSample);
+    float moderateCore = smoothstep(28.0, 52.0, blockerDbz);
+    float heavyCore = smoothstep(45.0, 68.0, blockerDbz);
+    float specificDbPerKm = radarAttenuation * (0.010 * moderateCore + 0.035 * heavyCore) * echoMask;
+    attenuationDb += 2.0 * specificDbPerKm * stepKm;
   }
 
-  if (sampleCoord.y < 0.0 || sampleCoord.y > 1.0)
-    return false;
+  return clamp(attenuationDb, 0.0, 36.0);
+}
 
-  ivec2 wall = texture(wallTex, sampleCoord).xy;
-  return wall.y != 0;
+vec4 applyPathAttenuation(vec4 sampleValue, float attenuationDb)
+{
+  if (!attenuationEnabled || productMode != 0 || attenuationDb <= 0.0)
+    return sampleValue;
+
+  float zRaw = getReflectivityRaw(sampleValue);
+  if (zRaw <= 0.0)
+    return sampleValue;
+
+  float attenuatedRaw = zRaw * exp(-attenuationDb / 4.3429448);
+  sampleValue.r = getReflectivityLinearFromRaw(attenuatedRaw);
+  return sampleValue;
 }
 
 bool colorFromProduct(vec4 sampleValue, out vec4 color, out float score)
 {
   if (productMode == 0) {
-    float zhLinear = max(sampleValue.r, 0.0);
-    float zRaw = sqrt(zhLinear) * reflMult + zhLinear * reflBoost;
-    float echoMask = smoothstep(0.00005, 0.00150, zRaw);
+    float echoMask = getReflectivityEchoMask(sampleValue);
     if (echoMask <= 0.0)
       return false;
 
-    float dBZ = 4.3429448 * log(zRaw + 1e-6);
+    float dBZ = getReflectivityDbz(sampleValue);
     float alpha = productOpaque ? 1.0 : clamp((dBZ - 5.0) / 30.0, 0.0, 0.60);
     vec4 paletteSample = sampleRadarPalette(dBZ);
     color = vec4(paletteSample.rgb, alpha * echoMask * paletteSample.a);
@@ -155,13 +244,11 @@ bool colorFromProduct(vec4 sampleValue, out vec4 color, out float score)
 bool getProductSignal(vec4 sampleValue, out float score, out float reliability)
 {
   if (productMode == 0) {
-    float zhLinear = max(sampleValue.r, 0.0);
-    float zRaw = sqrt(zhLinear) * reflMult + zhLinear * reflBoost;
-    float echoMask = smoothstep(0.00005, 0.00150, zRaw);
+    float echoMask = getReflectivityEchoMask(sampleValue);
     if (echoMask <= 0.0)
       return false;
 
-    score = 4.3429448 * log(zRaw + 1e-6);
+    score = getReflectivityDbz(sampleValue);
     reliability = echoMask;
     return true;
   }
@@ -179,7 +266,7 @@ bool getProductSignal(vec4 sampleValue, out float score, out float reliability)
   return true;
 }
 
-float getCompositeRadarQuality(float rangeKm, float rangeBinKm, float beamWidthRad, float maxRangeKm, float attenuation, float reliability)
+float getCompositeRadarQuality(float rangeKm, float rangeBinKm, float beamWidthRad, float maxRangeKm, float attenuation, float reliability, float pathAttenuationDb)
 {
   float rangeNorm = clamp(rangeKm / max(maxRangeKm, 0.01), 0.0, 1.0);
   float edgeScore = 1.0 - smoothstep(0.82, 1.0, rangeNorm);
@@ -187,7 +274,8 @@ float getCompositeRadarQuality(float rangeKm, float rangeBinKm, float beamWidthR
   float effectiveBinKm = max(max(rangeBinKm, rangeKm * beamWidthRad), 0.05);
   float resolutionScore = 1.0 / pow(effectiveBinKm, 1.15);
   float attenuationScore = 1.0 / (1.0 + max(attenuation, 0.0) * rangeNorm * rangeNorm * 0.12);
-  return reliability * edgeScore * rangeScore * resolutionScore * attenuationScore;
+  float pathScore = 1.0 / (1.0 + pathAttenuationDb * 0.08);
+  return reliability * edgeScore * rangeScore * resolutionScore * attenuationScore * pathScore;
 }
 
 void main()
@@ -209,12 +297,14 @@ void main()
         continue;
 
       vec4 sampleValue = texture(productTex, sampleCoord);
+      float pathAttenuationDb = getPathAttenuationDb(i, rangeKm, rangeBinKm, angleRad, radarParams[i].y);
+      sampleValue = applyPathAttenuation(sampleValue, pathAttenuationDb);
       float productScore;
       float reliability;
       if (!getProductSignal(sampleValue, productScore, reliability))
         continue;
 
-      float quality = getCompositeRadarQuality(rangeKm, rangeBinKm, beamWidthRad, radarSites[i].z, radarParams[i].y, reliability);
+      float quality = getCompositeRadarQuality(rangeKm, rangeBinKm, beamWidthRad, radarSites[i].z, radarParams[i].y, reliability, pathAttenuationDb);
       bestQuality = max(bestQuality, quality);
     }
 
@@ -239,12 +329,14 @@ void main()
         continue;
 
       vec4 sampleValue = texture(productTex, sampleCoord);
+      float pathAttenuationDb = getPathAttenuationDb(i, rangeKm, rangeBinKm, angleRad, radarParams[i].y);
+      sampleValue = applyPathAttenuation(sampleValue, pathAttenuationDb);
       float productScore;
       float reliability;
       if (!getProductSignal(sampleValue, productScore, reliability))
         continue;
 
-      float quality = getCompositeRadarQuality(rangeKm, rangeBinKm, beamWidthRad, radarSites[i].z, radarParams[i].y, reliability);
+      float quality = getCompositeRadarQuality(rangeKm, rangeBinKm, beamWidthRad, radarSites[i].z, radarParams[i].y, reliability, pathAttenuationDb);
       if (quality < qualityCutoff)
         continue;
 
@@ -282,6 +374,8 @@ void main()
       continue;
 
     vec4 sampleValue = texture(productTex, sampleCoord);
+    float pathAttenuationDb = getPathAttenuationDb(i, rangeKm, rangeBinKm, angleRad, radarParams[i].y);
+    sampleValue = applyPathAttenuation(sampleValue, pathAttenuationDb);
     vec4 productColor;
     float productScore;
     if (!colorFromProduct(sampleValue, productColor, productScore))
