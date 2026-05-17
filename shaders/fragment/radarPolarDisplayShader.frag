@@ -9,6 +9,7 @@ in vec2 fragCoord;
 uniform vec2 resolution;
 uniform vec2 texelSize;
 uniform sampler2D productTex;
+uniform sampler2D previousProductTex;
 uniform sampler2D radarPaletteTex;
 uniform isampler2D wallTex;
 
@@ -23,6 +24,8 @@ uniform float simHeightKm;
 uniform bool wrapHorizontally;
 uniform bool compositeMode;
 uniform bool attenuationEnabled;
+uniform bool sweepRevealEnabled;
+uniform float sweepProgress;
 uniform float compositePixelSize;
 uniform int radarCount;
 uniform vec4 radarSites[16];  // x, y, rangeKm, binKm
@@ -48,6 +51,27 @@ vec4 sampleRadarPalette(float value)
 float wrapDeltaX(float dx)
 {
   return dx - floor(dx + 0.5);
+}
+
+bool isBeamRevealedBySweep(float angleRad)
+{
+  if (!sweepRevealEnabled)
+    return true;
+
+  float normalizedAngle = mod(angleRad, TAU);
+  if (normalizedAngle > PI)
+    return false;
+
+  float upperHalfAngle = normalizedAngle;
+  float clockwiseSweepAngle = PI * (1.0 - clamp(sweepProgress, 0.0, 1.0));
+  return upperHalfAngle >= clockwiseSweepAngle;
+}
+
+vec4 sampleRadarProduct(vec2 sampleCoord, float angleRad)
+{
+  if (isBeamRevealedBySweep(angleRad))
+    return texture(productTex, sampleCoord);
+  return texture(previousProductTex, sampleCoord);
 }
 
 float getReflectivityRaw(vec4 sampleValue)
@@ -134,6 +158,8 @@ bool getPolarSample(int siteIndex, out vec2 sampleCoord, out float rangeKm, out 
   if (wrapHorizontally)
     dx = wrapDeltaX(dx);
   float dy = currentCoord.y - site.y;
+  if (dy < 0.0)
+    return false;
 
   vec2 deltaCells = vec2(dx * resolution.x, dy * resolution.y);
   float rangeCells = length(deltaCells);
@@ -153,7 +179,7 @@ bool getPolarSample(int siteIndex, out vec2 sampleCoord, out float rangeKm, out 
   float rangeBin = floor(rangeKm / rangeBinKm);
   float beamBin = floor(angleRad / beamWidthRad);
   float sampleRangeKm = (rangeBin + 0.5) * rangeBinKm;
-  float sampleAngle = (beamBin + 0.5) * beamWidthRad;
+  float sampleAngle = min((beamBin + 0.5) * beamWidthRad, PI);
   angleRad = sampleAngle;
   return getRadarSampleCoord(siteIndex, sampleRangeKm, sampleAngle, sampleCoord);
 }
@@ -179,7 +205,7 @@ float getPathAttenuationDb(int siteIndex, float rangeKm, float rangeBinKm, float
     if (!getRadarSampleCoord(siteIndex, sampleRangeKm, angleRad, blockerCoord))
       continue;
 
-    vec4 blockerSample = texture(productTex, blockerCoord);
+    vec4 blockerSample = sampleRadarProduct(blockerCoord, angleRad);
     float echoMask = getReflectivityEchoMask(blockerSample);
     if (echoMask <= 0.0)
       continue;
@@ -296,7 +322,7 @@ void main()
       if (!getPolarSample(i, sampleCoord, rangeKm, rangeBinKm, angleRad, beamWidthRad))
         continue;
 
-      vec4 sampleValue = texture(productTex, sampleCoord);
+      vec4 sampleValue = sampleRadarProduct(sampleCoord, angleRad);
       float pathAttenuationDb = getPathAttenuationDb(i, rangeKm, rangeBinKm, angleRad, radarParams[i].y);
       sampleValue = applyPathAttenuation(sampleValue, pathAttenuationDb);
       float productScore;
@@ -328,7 +354,7 @@ void main()
       if (!getPolarSample(i, sampleCoord, rangeKm, rangeBinKm, angleRad, beamWidthRad))
         continue;
 
-      vec4 sampleValue = texture(productTex, sampleCoord);
+      vec4 sampleValue = sampleRadarProduct(sampleCoord, angleRad);
       float pathAttenuationDb = getPathAttenuationDb(i, rangeKm, rangeBinKm, angleRad, radarParams[i].y);
       sampleValue = applyPathAttenuation(sampleValue, pathAttenuationDb);
       float productScore;
@@ -373,7 +399,7 @@ void main()
     if (!getPolarSample(i, sampleCoord, rangeKm, rangeBinKm, angleRad, beamWidthRad))
       continue;
 
-    vec4 sampleValue = texture(productTex, sampleCoord);
+    vec4 sampleValue = sampleRadarProduct(sampleCoord, angleRad);
     float pathAttenuationDb = getPathAttenuationDb(i, rangeKm, rangeBinKm, angleRad, radarParams[i].y);
     sampleValue = applyPathAttenuation(sampleValue, pathAttenuationDb);
     vec4 productColor;
