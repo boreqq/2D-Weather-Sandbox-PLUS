@@ -356,6 +356,8 @@ const RADAR_PRODUCT_RADIAL_VELOCITY = 'RADAR_RADIAL_VELOCITY';
 const RADAR_PANEL_MODE_COMPOSITE = 'RADAR_PANEL_MODE_COMPOSITE';
 const RADAR_PANEL_MODE_SINGLE_STATION = 'RADAR_PANEL_MODE_SINGLE_STATION';
 const RADAR_MAX_RENDER_SITES = 16;
+const RADAR_REFRESH_MODE_FULL = 'RADAR_REFRESH_MODE_FULL';
+const RADAR_REFRESH_MODE_SWEEP = 'RADAR_REFRESH_MODE_SWEEP';
 
 const RADAR_TYPE_PRESETS = Object.freeze({
   X : Object.freeze({
@@ -374,7 +376,7 @@ const RADAR_TYPE_PRESETS = Object.freeze({
   }),
   S : Object.freeze({
     rangeKm : 500,
-    resolutionKm : 2.0,
+    resolutionKm : 1.5,
     attenuation : 5,
     refreshSec : 4,
     beamWidthDeg : 0.8,
@@ -441,6 +443,7 @@ const RADAR_PRODUCTS_BY_ID = Object.freeze(
 
 const RADAR_PALETTE_STORAGE_VERSION = 1;
 const RADAR_PALETTE_TEXTURE_UNIT = 11;
+const RADAR_PREVIOUS_PRODUCT_TEXTURE_UNIT = 12;
 const RADAR_PALETTE_TEXTURE_WIDTH = 512;
 const RADAR_BUILTIN_PALETTE_PREFIX = 'builtin:';
 const RADAR_CUSTOM_PALETTE_PREFIX = 'custom:';
@@ -527,23 +530,23 @@ const FALLBACK_RADAR_PALETTE_DEFINITION = Object.freeze({
 const DEFAULT_RADAR_PALETTE_DEFINITIONS = Object.freeze({
   [RADAR_PRODUCT_REFLECTIVITY] : Object.freeze({
     id : getBuiltinRadarPaletteId(RADAR_PRODUCT_REFLECTIVITY),
-    name : 'Default',
+    name : 'RadarScope1',
     range : [ -15.0, 95.0 ],
     entries : [
-      createRadarPaletteEntry(-15.0, [ 0, 0, 0, 255 ], 'smooth'),
+      createRadarPaletteEntry(-15.0, [ 0, 0, 0, 0 ], 'smooth'),
       createRadarPaletteEntry(5.0, [ 29, 37, 60, 255 ], 'smooth'),
       createRadarPaletteEntry(17.5, [ 89, 155, 171, 255 ], 'smooth'),
       createRadarPaletteEntry(22.5, [ 33, 186, 72, 255 ], 'smooth'),
       createRadarPaletteEntry(32.5, [ 5, 101, 1, 255 ], 'smooth'),
-      createRadarPaletteEntry(37.5, [ 251, 252, 0, 255 ], 'smooth'),
-      createRadarPaletteEntry(42.5, [ 253, 149, 2, 255 ], 'smooth'),
-      createRadarPaletteEntry(50.0, [ 253, 38, 0, 255 ], 'smooth'),
-      createRadarPaletteEntry(60.0, [ 193, 148, 179, 255 ], 'smooth'),
-      createRadarPaletteEntry(70.0, [ 165, 2, 215, 255 ], 'smooth'),
-      createRadarPaletteEntry(75.0, [ 135, 255, 253, 255 ], 'smooth'),
+      createRadarPaletteEntry(37.5, [ 251, 252, 0, 255 ], 'smooth', [ 199, 176, 0, 255 ]),
+      createRadarPaletteEntry(42.5, [ 253, 149, 2, 255 ], 'smooth', [ 172, 92, 2, 255 ]),
+      createRadarPaletteEntry(50.0, [ 253, 38, 0, 255 ], 'smooth', [ 135, 43, 22, 255 ]),
+      createRadarPaletteEntry(60.0, [ 193, 148, 179, 255 ], 'smooth', [ 200, 23, 119, 255 ]),
+      createRadarPaletteEntry(70.0, [ 165, 2, 215, 255 ], 'smooth', [ 64, 0, 146, 255 ]),
+      createRadarPaletteEntry(75.0, [ 135, 255, 253, 255 ], 'smooth', [ 54, 120, 142, 255 ]),
       createRadarPaletteEntry(80.0, [ 173, 99, 64, 255 ], 'smooth'),
-      createRadarPaletteEntry(85.0, [ 105, 0, 4, 255 ], 'smooth', [ 0, 0, 0, 255 ]),
-      createRadarPaletteEntry(95.0, [ 0, 0, 0, 255 ], 'solid'),
+      createRadarPaletteEntry(85.0, [ 105, 0, 4, 255 ], 'smooth'),
+      createRadarPaletteEntry(95.0, [ 0, 0, 0, 255 ], 'smooth'),
     ],
   }),
   [RADAR_PRODUCT_RHOHV] : Object.freeze({
@@ -1072,6 +1075,8 @@ const guiControls_default = {
   reflectivityPixelSize : 8,
   radarShowRangeRings : false,
   radarAttenuationEnabled : true,
+  radarRefreshMode : RADAR_REFRESH_MODE_FULL,
+  radarSweepDurationSec : 2.5,
   rhohvBackground : true,
   debugRhohv : false,
   rhohvPixelSize : 8,
@@ -1143,6 +1148,8 @@ var airplaneMode = false;
 var dropletFollowID = -1;
 var reflectivityDbgEl;
 var lastReflectivitySnapshotTime = -Infinity;
+var radarSweepStartTime = -Infinity;
+var radarPreviousSnapshotReady = false;
 var radarRefreshNoiseTick = 0;
 
 var minShadowLight = 0.02;
@@ -5314,6 +5321,25 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   }
 
   var radarDisplayModeController;
+  var radarRefreshSecController;
+  var radarSweepDurationController;
+
+  function setDatGuiControllerVisible(controller, visible)
+  {
+    if (!controller)
+      return;
+
+    const rowEl = controller.__li || (controller.domElement ? controller.domElement.parentElement : null);
+    if (rowEl)
+      rowEl.style.display = visible ? '' : 'none';
+  }
+
+  function updateRadarTimingDatGuiControls()
+  {
+    const sweepMode = guiControls && guiControls.radarRefreshMode == RADAR_REFRESH_MODE_SWEEP;
+    setDatGuiControllerVisible(radarRefreshSecController, !sweepMode);
+    setDatGuiControllerVisible(radarSweepDurationController, sweepMode);
+  }
 
   function syncLegacyRadarProductField()
   {
@@ -5333,6 +5359,11 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     if (!isImplementedRadarProduct(guiControls.lastLiveRadarProduct))
       guiControls.lastLiveRadarProduct = RADAR_PRODUCT_REFLECTIVITY;
+
+    if (guiControls.radarRefreshMode != RADAR_REFRESH_MODE_SWEEP)
+      guiControls.radarRefreshMode = RADAR_REFRESH_MODE_FULL;
+
+    guiControls.radarSweepDurationSec = clampNumber(Number(guiControls.radarSweepDurationSec) || guiControls_default.radarSweepDurationSec, 0.1, 60.0);
 
     syncLegacyRadarProductField();
   }
@@ -5822,12 +5853,24 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     // Radar-specific controls
     var radar_folder = datGui.addFolder('Radar');
-    radar_folder.add(guiControls, 'reflectivityRefreshSec', 0.0, 10.0, 0.01)
+    radarRefreshSecController = radar_folder.add(guiControls, 'reflectivityRefreshSec', 0.0, 10.0, 0.01)
       .onChange(function() {
         handleRadarUiExternalChange();
       })
       .name('Radar refresh (s)')
       .listen();
+    radar_folder.add(guiControls, 'radarRefreshMode', {
+      'Full Snapshot' : RADAR_REFRESH_MODE_FULL,
+      'Sweep Reveal' : RADAR_REFRESH_MODE_SWEEP,
+    })
+      .onChange(handleRadarUiExternalChange)
+      .name('Refresh mode')
+      .listen();
+    radarSweepDurationController = radar_folder.add(guiControls, 'radarSweepDurationSec', 0.1, 60.0, 0.1)
+      .onChange(handleRadarUiExternalChange)
+      .name('Sweep duration (s)')
+      .listen();
+    updateRadarTimingDatGuiControls();
     radar_folder.add(guiControls, 'radarAttenuationEnabled')
       .onChange(handleRadarUiExternalChange)
       .name('Radar attenuation')
@@ -6429,6 +6472,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     }
     if (radarDisplayModeController)
       radarDisplayModeController.updateDisplay();
+    updateRadarTimingDatGuiControls();
   }
 
   function appendRadarToggleControl(parent, label, description, checked, onChange)
@@ -6924,6 +6968,30 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         guiControls.radarAttenuationEnabled,
         function(checked) { guiControls.radarAttenuationEnabled = checked; }
       );
+      appendRadarSelectControl(radarSettingsContentEl, {
+        label : 'Refresh Mode',
+        value : guiControls.radarRefreshMode,
+        options : [
+          {value : RADAR_REFRESH_MODE_FULL, label : 'Full Snapshot'},
+          {value : RADAR_REFRESH_MODE_SWEEP, label : 'Sweep Reveal'},
+        ],
+        onChange : function(value) {
+          guiControls.radarRefreshMode = value == RADAR_REFRESH_MODE_SWEEP ? RADAR_REFRESH_MODE_SWEEP : RADAR_REFRESH_MODE_FULL;
+          handleRadarUiExternalChange();
+        },
+      });
+      if (guiControls.radarRefreshMode == RADAR_REFRESH_MODE_SWEEP) {
+        appendRadarRangeControl(radarSettingsContentEl, {
+          label : 'Sweep Duration (s)',
+          description : 'Time needed to reveal one frozen radar snapshot clockwise.',
+          min : 0.1,
+          max : 60.0,
+          step : 0.1,
+          getValue : function() { return guiControls.radarSweepDurationSec; },
+          formatValue : function(value) { return formatRadarUiNumber(value, 1); },
+          onInput : function(value) { guiControls.radarSweepDurationSec = value; },
+        });
+      }
       appendRadarToggleControl(
         radarSettingsContentEl,
         'Background',
@@ -6951,16 +7019,18 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
           lastReflectivitySnapshotTime = -Infinity;
         },
       });
-      appendRadarRangeControl(radarSettingsContentEl, {
-        label : 'Radar Refresh (s)',
-        description : 'Shared refresh cadence for radar snapshots.',
-        min : 0,
-        max : 10,
-        step : 0.01,
-        getValue : function() { return guiControls.reflectivityRefreshSec; },
-        formatValue : function(value) { return formatRadarUiNumber(value, 2); },
-        onInput : function(value) { guiControls.reflectivityRefreshSec = value; },
-      });
+      if (guiControls.radarRefreshMode != RADAR_REFRESH_MODE_SWEEP) {
+        appendRadarRangeControl(radarSettingsContentEl, {
+          label : 'Radar Refresh (s)',
+          description : 'Shared refresh cadence for radar snapshots.',
+          min : 0,
+          max : 10,
+          step : 0.01,
+          getValue : function() { return guiControls.reflectivityRefreshSec; },
+          formatValue : function(value) { return formatRadarUiNumber(value, 2); },
+          onInput : function(value) { guiControls.reflectivityRefreshSec = value; },
+        });
+      }
       return;
     }
 
@@ -7015,16 +7085,18 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
           lastReflectivitySnapshotTime = -Infinity;
         },
       });
-      appendRadarRangeControl(radarSettingsContentEl, {
-        label : 'Radar Refresh (s)',
-        description : 'Shared refresh cadence for radar snapshots.',
-        min : 0,
-        max : 10,
-        step : 0.01,
-        getValue : function() { return guiControls.reflectivityRefreshSec; },
-        formatValue : function(value) { return formatRadarUiNumber(value, 2); },
-        onInput : function(value) { guiControls.reflectivityRefreshSec = value; },
-      });
+      if (guiControls.radarRefreshMode != RADAR_REFRESH_MODE_SWEEP) {
+        appendRadarRangeControl(radarSettingsContentEl, {
+          label : 'Radar Refresh (s)',
+          description : 'Shared refresh cadence for radar snapshots.',
+          min : 0,
+          max : 10,
+          step : 0.01,
+          getValue : function() { return guiControls.reflectivityRefreshSec; },
+          formatValue : function(value) { return formatRadarUiNumber(value, 2); },
+          onInput : function(value) { guiControls.reflectivityRefreshSec = value; },
+        });
+      }
       return;
     }
 
@@ -7072,16 +7144,18 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       formatValue : function(value) { return formatRadarUiNumber(value, 2); },
       onInput : function(value) { guiControls.rhohvClutterDensity = value; },
     });
-    appendRadarRangeControl(radarSettingsContentEl, {
-      label : 'Radar Refresh (s)',
-      description : 'Shared refresh cadence for radar snapshots.',
-      min : 0,
-      max : 10,
-      step : 0.01,
-      getValue : function() { return guiControls.reflectivityRefreshSec; },
-      formatValue : function(value) { return formatRadarUiNumber(value, 2); },
-      onInput : function(value) { guiControls.reflectivityRefreshSec = value; },
-    });
+    if (guiControls.radarRefreshMode != RADAR_REFRESH_MODE_SWEEP) {
+      appendRadarRangeControl(radarSettingsContentEl, {
+        label : 'Radar Refresh (s)',
+        description : 'Shared refresh cadence for radar snapshots.',
+        min : 0,
+        max : 10,
+        step : 0.01,
+        getValue : function() { return guiControls.reflectivityRefreshSec; },
+        formatValue : function(value) { return formatRadarUiNumber(value, 2); },
+        onInput : function(value) { guiControls.reflectivityRefreshSec = value; },
+      });
+    }
   }
 
   function ensureRadarPanel()
@@ -8905,12 +8979,15 @@ var soundingGraph = {
   const waterTexture_0 = gl.createTexture();
   const waterTexture_1 = gl.createTexture();
   const reflectivitySnapshotTex = gl.createTexture();
+  const reflectivityPreviousSnapshotTex = gl.createTexture();
   const phaseTexture = gl.createTexture();           // liquid/ice sums and hail shaft mask
   const phaseStatsTexture = gl.createTexture();      // rho_i / irregularity stats for rhohv
   const radarMomentsTexture = gl.createTexture();    // Zh, Zv, HV, count
   const radarMomentsSnapshotTex = gl.createTexture();
   const rhohvSnapshotTex = gl.createTexture();
+  const rhohvPreviousSnapshotTex = gl.createTexture();
   const zdrSnapshotTex = gl.createTexture();
+  const zdrPreviousSnapshotTex = gl.createTexture();
   const radarFieldTexture_0 = gl.createTexture();    // smoothed radar field
   const radarFieldTexture_1 = gl.createTexture();    // smoothed radar field
   const hailShaftTexture_0 = gl.createTexture();      // smoothed hail signal for realistic precipitation tint
@@ -8969,6 +9046,8 @@ var soundingGraph = {
   {
     radarFieldCurrentIndex = 0;
     hailShaftCurrentIndex = 0;
+    radarSweepStartTime = -Infinity;
+    radarPreviousSnapshotReady = false;
 
     gl.bindTexture(gl.TEXTURE_2D, baseTexture_0);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, initialBaseTex);
@@ -9017,6 +9096,11 @@ var soundingGraph = {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 
+    gl.bindTexture(gl.TEXTURE_2D, reflectivityPreviousSnapshotTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
     // live phase (water/ice sums)
     gl.bindTexture(gl.TEXTURE_2D, phaseTexture);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
@@ -9044,7 +9128,17 @@ var soundingGraph = {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 
+    gl.bindTexture(gl.TEXTURE_2D, rhohvPreviousSnapshotTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
     gl.bindTexture(gl.TEXTURE_2D, zdrSnapshotTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+    gl.bindTexture(gl.TEXTURE_2D, zdrPreviousSnapshotTex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
@@ -9087,8 +9181,28 @@ var soundingGraph = {
 
   createAmbientLightFBOs();
 
+  function copyFramebufferColorToTexture(sourceFBO, destinationTexture)
+  {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, sourceFBO);
+    gl.readBuffer(gl.COLOR_ATTACHMENT0);
+    gl.bindTexture(gl.TEXTURE_2D, destinationTexture);
+    gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, sim_res_x, sim_res_y);
+  }
+
+  function copyCurrentRadarSnapshotsToPrevious()
+  {
+    copyFramebufferColorToTexture(reflectivitySnapshotFBO, reflectivityPreviousSnapshotTex);
+    copyFramebufferColorToTexture(rhohvSnapshotFBO, rhohvPreviousSnapshotTex);
+    copyFramebufferColorToTexture(zdrSnapshotFBO, zdrPreviousSnapshotTex);
+    radarPreviousSnapshotReady = true;
+  }
+
   function refreshReflectivitySnapshot(now)
   {
+    const hadSnapshot = Number.isFinite(lastReflectivitySnapshotTime);
+    if (hadSnapshot)
+      copyCurrentRadarSnapshotsToPrevious();
+
     gl.bindFramebuffer(gl.FRAMEBUFFER, phaseFrameBuff);
     gl.readBuffer(gl.COLOR_ATTACHMENT0);
     gl.bindTexture(gl.TEXTURE_2D, phaseSnapshotTex);
@@ -9139,6 +9253,9 @@ var soundingGraph = {
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
     lastReflectivitySnapshotTime = now;
+    radarSweepStartTime = now;
+    if (!hadSnapshot)
+      copyCurrentRadarSnapshotsToPrevious();
     radarRefreshNoiseTick += 1.0;
     radarNeedsMeasure = true; // trigger radar updates after new snapshot
   }
@@ -9153,6 +9270,37 @@ var soundingGraph = {
     } else {
       gl.bindTexture(gl.TEXTURE_2D, reflectivitySnapshotTex);
     }
+  }
+
+  function bindRadarPreviousProductTextureForDisplayMode(displayMode)
+  {
+    gl.activeTexture(gl.TEXTURE0 + RADAR_PREVIOUS_PRODUCT_TEXTURE_UNIT);
+    if (displayMode == 'DISP_RHOHV') {
+      gl.bindTexture(gl.TEXTURE_2D, rhohvPreviousSnapshotTex);
+    } else if (displayMode == 'DISP_ZDR') {
+      gl.bindTexture(gl.TEXTURE_2D, zdrPreviousSnapshotTex);
+    } else {
+      gl.bindTexture(gl.TEXTURE_2D, reflectivityPreviousSnapshotTex);
+    }
+  }
+
+  function getRadarSweepDurationMs()
+  {
+    return Math.max(0.1, Number(guiControls.radarSweepDurationSec) || guiControls_default.radarSweepDurationSec) * 1000.0;
+  }
+
+  function getRadarSnapshotIntervalMs()
+  {
+    if (guiControls.radarRefreshMode == RADAR_REFRESH_MODE_SWEEP)
+      return getRadarSweepDurationMs();
+    return Math.max(0.0, guiControls.reflectivityRefreshSec * 1000.0);
+  }
+
+  function getRadarSweepProgress(now)
+  {
+    if (guiControls.radarRefreshMode != RADAR_REFRESH_MODE_SWEEP || !radarPreviousSnapshotReady || !Number.isFinite(radarSweepStartTime))
+      return 1.0;
+    return clampNumber((now - radarSweepStartTime) / getRadarSweepDurationMs(), 0.0, 1.0);
   }
 
   function setupPolarRadarDisplay(displayMode, cursorType, productOpaque)
@@ -9179,6 +9327,9 @@ var soundingGraph = {
     gl.uniform1i(gl.getUniformLocation(radarPolarDisplayProgram, 'wrapHorizontally'), guiControls.wrapHorizontally ? 1 : 0);
     gl.uniform1i(gl.getUniformLocation(radarPolarDisplayProgram, 'compositeMode'), radarPanelMode == RADAR_PANEL_MODE_COMPOSITE ? 1 : 0);
     gl.uniform1i(gl.getUniformLocation(radarPolarDisplayProgram, 'attenuationEnabled'), guiControls.radarAttenuationEnabled ? 1 : 0);
+    const sweepProgress = getRadarSweepProgress(performance.now ? performance.now() : Date.now());
+    gl.uniform1i(gl.getUniformLocation(radarPolarDisplayProgram, 'sweepRevealEnabled'), guiControls.radarRefreshMode == RADAR_REFRESH_MODE_SWEEP && radarPreviousSnapshotReady ? 1 : 0);
+    gl.uniform1f(gl.getUniformLocation(radarPolarDisplayProgram, 'sweepProgress'), sweepProgress);
     gl.uniform1f(gl.getUniformLocation(radarPolarDisplayProgram, 'compositePixelSize'), getRadarProductPixelSize(displayMode));
     gl.uniform1i(gl.getUniformLocation(radarPolarDisplayProgram, 'radarCount'), uniformData.count);
     gl.uniform4fv(gl.getUniformLocation(radarPolarDisplayProgram, 'radarSites[0]'), uniformData.sites);
@@ -9190,6 +9341,7 @@ var soundingGraph = {
     gl.activeTexture(gl.TEXTURE2);
     gl.bindTexture(gl.TEXTURE_2D, wallTexture_1);
     bindRadarProductTextureForDisplayMode(displayMode);
+    bindRadarPreviousProductTextureForDisplayMode(displayMode);
 
     return true;
   }
@@ -9655,6 +9807,7 @@ var soundingGraph = {
   gl.uniform2f(gl.getUniformLocation(radarPolarDisplayProgram, 'resolution'), sim_res_x, sim_res_y);
   gl.uniform2f(gl.getUniformLocation(radarPolarDisplayProgram, 'texelSize'), texelSizeX, texelSizeY);
   gl.uniform1i(gl.getUniformLocation(radarPolarDisplayProgram, 'productTex'), 4);
+  gl.uniform1i(gl.getUniformLocation(radarPolarDisplayProgram, 'previousProductTex'), RADAR_PREVIOUS_PRODUCT_TEXTURE_UNIT);
   gl.uniform1i(gl.getUniformLocation(radarPolarDisplayProgram, 'wallTex'), 2);
   gl.uniform1i(gl.getUniformLocation(radarPolarDisplayProgram, 'radarPaletteTex'), RADAR_PALETTE_TEXTURE_UNIT);
 
@@ -10210,7 +10363,7 @@ var soundingGraph = {
 
     // radar-like sweep: freeze reflectivity every user-defined interval
     const nowMs = performance.now ? performance.now() : Date.now();
-    const refreshMs = Math.max(0.0, guiControls.reflectivityRefreshSec * 1000.0);
+    const refreshMs = getRadarSnapshotIntervalMs();
     if (nowMs - lastReflectivitySnapshotTime >= refreshMs) {
       refreshReflectivitySnapshot(nowMs);
     }
