@@ -34,8 +34,8 @@ void main()
 
   float pointSize = 4.0;
   if (precipDisplayMode == 1) {
-    float visibleSize = max(size, 0.0);
-    pointSize = mix(3.0, 20.5, smoothstep(0.05, 8.00, visibleSize));
+    float visibleSizeMm = max(size, 0.0);
+    pointSize = mix(3.0, 20.5, sqrt(clamp(visibleSizeMm / 50.0, 0.0, 1.0)));
   }
 
   gl_PointSize = max(view[2] * pointSize / aspectRatios[0], 2.0);

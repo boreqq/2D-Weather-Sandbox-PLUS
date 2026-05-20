@@ -71,6 +71,8 @@ void disableDroplet()
   newCompactness = 0.0;
 }
 
+const float hydrometeorDiameterMmPerMassCubeRoot = 1.0;
+
 float calcHydrometeorSize(vec2 hydromass, float hydrodensity, float hydroCompactness)
 {
   float liquid = max(hydromass[WATER], 0.0);
@@ -84,9 +86,8 @@ float calcHydrometeorSize(vec2 hydromass, float hydrodensity, float hydroCompact
   float clampedDensity = clamp(hydrodensity, 0.12, 1.0);
   float clampedCompactness = clamp(hydroCompactness, 0.0, 1.0);
 
-  // Base size is water-equivalent. This avoids low-density snow blowing up to
-  // unrealistically huge diameters while still allowing hail to become larger.
-  float waterEquivalentSize = pow(totalMass, 1.0 / 3.0);
+  // Size is stored as particle diameter in millimeters.
+  float waterEquivalentDiameterMm = pow(totalMass, 1.0 / 3.0) * hydrometeorDiameterMmPerMassCubeRoot;
 
   float snowiness = clamp((0.72 - clampedDensity) / 0.42, 0.0, 1.0) * (1.0 - smoothstep(0.28, 0.72, clampedCompactness));
   float hailness = smoothstep(0.72, 0.98, clampedCompactness) * smoothstep(0.55, 0.95, iceFraction);
@@ -104,10 +105,10 @@ float calcHydrometeorSize(vec2 hydromass, float hydrodensity, float hydroCompact
   float mixedScale = mix(iceScale, max(1.00, 1.05 + hailness * 0.10), smoothstep(0.18, 0.88, liquidFraction));
 
   if (ice <= 1e-6)
-    return waterEquivalentSize;
+    return waterEquivalentDiameterMm;
   if (liquid <= 1e-6)
-    return waterEquivalentSize * iceScale;
-  return waterEquivalentSize * mixedScale;
+    return waterEquivalentDiameterMm * iceScale;
+  return waterEquivalentDiameterMm * mixedScale;
 }
 
 void main()
@@ -115,7 +116,7 @@ void main()
   newPos = dropPosition;
   newMass = mass;         // amount of water and ice carried
   newDensity = density;   // determines fall speed
-  newSize = size;         // hydrometeor size proxy for radar moments
+  newSize = size;         // hydrometeor diameter in mm
   newCompactness = compactness; // remembers how rimed / compact the ice core is
 
   if (mass[WATER] < 0.) { // inactive
@@ -322,7 +323,7 @@ void main()
           float dryIceCore = smoothstep(0.90, 0.995, newMass[ICE] / max(totalMassPost, 1e-6)) *
                              (1.0 - smoothstep(0.02, 0.12, liquidFractionPost)) *
                              smoothstep(0.82, 1.00, newDensity);
-          float hailCoreBoost = dryIceCore * smoothstep(0.80, 1.50, max(newSize, 0.0));
+          float hailCoreBoost = dryIceCore * smoothstep(5.0, 20.0, max(newSize, 0.0));
           float compactnessTarget = clamp(
             0.12 +
             smoothstep(0.45, 0.98, newDensity) * 0.38 +
@@ -354,7 +355,7 @@ void main()
       else if (newMass[ICE] > 1e-6)
         sizeAdjustRate = 0.16;
 
-      // Faster response when droplets are shrinking (evaporation / melting -> smaller hydrometeor size)
+      // Faster response when droplets are shrinking (evaporation / melting -> smaller diameter)
       if (targetSize < newSize)
         sizeAdjustRate = max(sizeAdjustRate, 0.60);
 

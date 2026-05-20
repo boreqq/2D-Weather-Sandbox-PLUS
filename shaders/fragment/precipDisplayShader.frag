@@ -19,7 +19,7 @@ out vec4 fragmentColor;
 vec3 sizeColor(float particleSize)
 {
   const int n = 13;
-  float levels[n] = float[n](0.0, 0.35, 0.75, 1.20, 1.80, 2.50, 3.20, 4.00, 4.80, 5.60, 6.40, 7.20, 8.00);
+  float levels[n] = float[n](0.0, 0.25, 0.50, 1.00, 2.00, 3.00, 5.00, 8.00, 12.00, 20.00, 30.00, 40.00, 50.00);
   vec3 cols[n] = vec3[n](
     vec3(50, 120, 255) / 255.0,
     vec3(60, 210, 255) / 255.0,
@@ -58,14 +58,15 @@ void hydrometeorMemberships(float liquid, float ice, float density, float size, 
   float liquidFraction = liquid / max(total, 1e-6);
   float iceFraction = ice / max(total, 1e-6);
   float compact = clamp(compactness, 0.0, 1.0);
+  float diameterMm = max(size, 0.0);
   float dryIce = smoothstep(0.60, 0.98, iceFraction) * (1.0 - smoothstep(0.04, 0.20, liquidFraction));
 
   float rain = smoothstep(0.82, 0.995, liquidFraction) * (1.0 - smoothstep(0.05, 0.35, iceFraction));
   float wetHail = smoothstep(0.65, 0.98, iceFraction) * smoothstep(0.06, 0.35, liquidFraction) * smoothstep(0.78, 1.00, density) *
-                  smoothstep(0.70, 1.00, compact) * smoothstep(0.55, 1.10, size);
-  float hail = dryIce * smoothstep(0.82, 1.00, density) * smoothstep(0.72, 1.00, compact) * smoothstep(0.55, 1.10, size) *
+                  smoothstep(0.70, 1.00, compact) * smoothstep(5.0, 15.0, diameterMm);
+  float hail = dryIce * smoothstep(0.82, 1.00, density) * smoothstep(0.72, 1.00, compact) * smoothstep(5.0, 15.0, diameterMm) *
                (1.0 - smoothstep(0.04, 0.16, liquidFraction)) * (1.0 - wetHail);
-  float graupel = dryIce * smoothstep(0.38, 0.82, density) * smoothstep(0.28, 0.78, compact) * smoothstep(0.30, 0.90, size) *
+  float graupel = dryIce * smoothstep(0.38, 0.82, density) * smoothstep(0.28, 0.78, compact) * smoothstep(1.2, 5.0, diameterMm) *
                   (1.0 - hail) * (1.0 - wetHail);
   float melting = smoothstep(0.04, 0.40, liquidFraction) * smoothstep(0.30, 0.98, iceFraction) *
                   (1.0 - smoothstep(0.76, 1.00, compact) * smoothstep(0.82, 1.00, density));
@@ -96,10 +97,9 @@ void main()
   float squareMask = 1.0;
 
   if (precipDisplayMode == 1) {
-    float particleMass = max(mass_out[WATER] + mass_out[ICE], 0.0);
     float displaySize = max(size_out, 0.0);
-    float visibleMetric = max(displaySize, particleMass * 0.85);
-    float opacity = mix(0.50, 0.98, smoothstep(0.05, 8.00, visibleMetric));
+    float visibleMetric = displaySize;
+    float opacity = mix(0.45, 0.98, smoothstep(0.10, 8.00, visibleMetric));
     fragmentColor = vec4(sizeColor(displaySize), opacity * squareMask);
     return;
   }
@@ -109,9 +109,9 @@ void main()
   hydrometeorMemberships(max(mass_out[WATER], 0.0), max(mass_out[ICE], 0.0), density_out, max(size_out, 0.0), compactness_out, primary, secondary);
 
   float displaySize = max(size_out, 0.0);
-  float rainDisplayFlatten = smoothstep(0.55, 2.20, displaySize) * 0.56;
-  float mixedDisplayFlatten = smoothstep(0.65, 2.05, displaySize) * 0.28;
-  float snowDisplayFlatten = smoothstep(0.75, 1.65, displaySize) * 0.08;
+  float rainDisplayFlatten = smoothstep(1.0, 6.0, displaySize) * 0.56;
+  float mixedDisplayFlatten = smoothstep(2.0, 8.0, displaySize) * 0.28;
+  float snowDisplayFlatten = smoothstep(3.0, 12.0, displaySize) * 0.08;
   float displayFlattening = rainDisplayFlatten * primary.r +
                             mixedDisplayFlatten * (secondary.g * 0.70 + secondary.r * 0.32) +
                             snowDisplayFlatten * (primary.g * 0.60 + primary.b * 0.35);
