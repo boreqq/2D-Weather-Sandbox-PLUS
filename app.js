@@ -1368,6 +1368,8 @@ function clamp01(x)
   return Math.min(Math.max(x, 0.0), 1.0);
 }
 
+const hydrometeorDiameterMmPerMassCubeRoot = 1.0;
+
 function inferCompactnessProxy(waterMass, iceMass, density, size = 0.0)
 {
   const liquid = Math.max(waterMass, 0.0);
@@ -1382,12 +1384,13 @@ function inferCompactnessProxy(waterMass, iceMass, density, size = 0.0)
   const liquidFraction = liquid / Math.max(total, 1e-6);
   const densityNorm = smoothstepJS(0.42, 0.98, Math.min(Math.max(density, 0.0), 1.0));
   const iceNorm = smoothstepJS(0.55, 0.98, iceFraction);
-  const sizeNorm = smoothstepJS(0.45, 1.35, Math.max(size, 0.0));
+  const diameterMm = Math.max(size, 0.0);
+  const sizeNorm = smoothstepJS(1.0, 8.0, diameterMm);
   const baseCompactness = 0.08 + densityNorm * 0.52 + iceNorm * 0.22 + sizeNorm * 0.18;
   const dryIceCore = smoothstepJS(0.90, 0.995, iceFraction) *
                      (1.0 - smoothstepJS(0.02, 0.12, liquidFraction)) *
                      smoothstepJS(0.82, 1.00, Math.min(Math.max(density, 0.0), 1.0));
-  const hailCoreBoost = dryIceCore * smoothstepJS(0.80, 1.50, Math.max(size, 0.0));
+  const hailCoreBoost = dryIceCore * smoothstepJS(5.0, 20.0, diameterMm);
   return clamp01(Math.max(baseCompactness, hailCoreBoost * mixJS(0.58, 0.92, hailCoreBoost)));
 }
 
@@ -1403,7 +1406,7 @@ function calcHydrometeorSizeProxy(waterMass, iceMass, density, compactness = inf
   const liquidFraction = liquid / Math.max(totalMass, 1e-6);
   const clampedDensity = Math.min(Math.max(density, 0.12), 1.0);
   const clampedCompactness = clamp01(compactness);
-  const waterEquivalentSize = Math.pow(totalMass, 1.0 / 3.0);
+  const waterEquivalentDiameterMm = Math.pow(totalMass, 1.0 / 3.0) * hydrometeorDiameterMmPerMassCubeRoot;
 
   const snowiness = clamp01((0.72 - clampedDensity) / 0.42) * (1.0 - smoothstepJS(0.28, 0.72, clampedCompactness));
   const hailness = smoothstepJS(0.72, 0.98, clampedCompactness) * smoothstepJS(0.55, 0.95, iceFraction);
@@ -1416,10 +1419,10 @@ function calcHydrometeorSizeProxy(waterMass, iceMass, density, compactness = inf
   const mixedScale = mixJS(iceScale, Math.max(1.00, 1.05 + hailness * 0.10), smoothstepJS(0.18, 0.88, liquidFraction));
 
   if (ice <= 1e-6)
-    return waterEquivalentSize;
+    return waterEquivalentDiameterMm;
   if (liquid <= 1e-6)
-    return waterEquivalentSize * iceScale;
-  return waterEquivalentSize * mixedScale;
+    return waterEquivalentDiameterMm * iceScale;
+  return waterEquivalentDiameterMm * mixedScale;
 }
 
 function computeHydrometeorMemberships(waterMass, iceMass, density, size, compactness)
@@ -1441,14 +1444,15 @@ function computeHydrometeorMemberships(waterMass, iceMass, density, size, compac
   const liquidFraction = liquid / Math.max(total, 1e-6);
   const iceFraction = ice / Math.max(total, 1e-6);
   const compact = clamp01(compactness);
+  const diameterMm = Math.max(size, 0.0);
   const dryIce = smoothstepJS(0.60, 0.98, iceFraction) * (1.0 - smoothstepJS(0.04, 0.20, liquidFraction));
 
   let rain = smoothstepJS(0.82, 0.995, liquidFraction) * (1.0 - smoothstepJS(0.05, 0.35, iceFraction));
   let wetHail = smoothstepJS(0.65, 0.98, iceFraction) * smoothstepJS(0.06, 0.35, liquidFraction) * smoothstepJS(0.78, 1.00, density) *
-                smoothstepJS(0.70, 1.00, compact) * smoothstepJS(0.55, 1.10, size);
-  let hail = dryIce * smoothstepJS(0.82, 1.00, density) * smoothstepJS(0.72, 1.00, compact) * smoothstepJS(0.55, 1.10, size) *
+                smoothstepJS(0.70, 1.00, compact) * smoothstepJS(5.0, 15.0, diameterMm);
+  let hail = dryIce * smoothstepJS(0.82, 1.00, density) * smoothstepJS(0.72, 1.00, compact) * smoothstepJS(5.0, 15.0, diameterMm) *
              (1.0 - smoothstepJS(0.04, 0.16, liquidFraction)) * (1.0 - wetHail);
-  let graupel = dryIce * smoothstepJS(0.38, 0.82, density) * smoothstepJS(0.28, 0.78, compact) * smoothstepJS(0.30, 0.90, size) *
+  let graupel = dryIce * smoothstepJS(0.38, 0.82, density) * smoothstepJS(0.28, 0.78, compact) * smoothstepJS(1.2, 5.0, diameterMm) *
                 (1.0 - hail) * (1.0 - wetHail);
   let melting = smoothstepJS(0.04, 0.40, liquidFraction) * smoothstepJS(0.30, 0.98, iceFraction) *
                 (1.0 - smoothstepJS(0.76, 1.00, compact) * smoothstepJS(0.82, 1.00, density));
@@ -1526,17 +1530,18 @@ function calcDropletRadarMetrics(waterMass, iceMass, density, size, compactness 
   const liquidFraction = liquid / Math.max(total, 1e-6);
   const iceFraction = ice / Math.max(total, 1e-6);
   const hydro = computeHydrometeorMemberships(liquid, ice, density, size, compactness);
+  const diameterMm = Math.max(size, 0.0);
 
-  const rainFlatten = Math.min(Math.max((size - 0.35) * 0.26, 0.0), 0.38);
-  const mixedFlatten = Math.min(Math.max((size - 0.45) * 0.14, 0.0), 0.16);
-  const snowFlatten = Math.min(Math.max((size - 0.55) * 0.05, 0.0), 0.05);
+  const rainFlatten = Math.min(Math.max((diameterMm - 1.0) * 0.085, 0.0), 0.38);
+  const mixedFlatten = Math.min(Math.max((diameterMm - 2.0) * 0.035, 0.0), 0.16);
+  const snowFlatten = Math.min(Math.max((diameterMm - 3.0) * 0.008, 0.0), 0.05);
   const flattening = rainFlatten * hydro.rain +
                      mixedFlatten * (hydro.melting * 0.55 + hydro.wetHail * 0.18) +
                      snowFlatten * (hydro.snow * 0.70 + hydro.graupel * 0.35);
 
   const radarPresence = smoothstepJS(0.12, 0.35, total);
-  const waterSize = size * Math.pow(Math.max(liquidFraction, 0.0), 1.0 / 3.0);
-  const iceSize = size * Math.pow(Math.max(iceFraction, 0.0), 1.0 / 3.0);
+  const waterSize = diameterMm * Math.pow(Math.max(liquidFraction, 0.0), 1.0 / 3.0);
+  const iceSize = diameterMm * Math.pow(Math.max(iceFraction, 0.0), 1.0 / 3.0);
 
   const waterMoment = Math.pow(Math.max(waterSize * 0.58, 1e-4), 6.0);
   const iceDensity = Math.min(Math.max(density, 0.12), 1.0);
@@ -1547,15 +1552,15 @@ function calcDropletRadarMetrics(waterMass, iceMass, density, size, compactness 
 
   const brightBand = hydro.melting * 0.08 + hydro.wetHail * 0.05;
 
-  const largeRainTail = smoothstepJS(1.55, 2.70, size);
-  const giantRainTail = smoothstepJS(2.05, 3.00, size);
-  const meltingTail = smoothstepJS(1.45, 2.30, size);
-  const rainZdr = mixJS(0.12, 2.45, smoothstepJS(0.45, 1.55, size)) + flattening * 1.10 + largeRainTail * 0.78 + giantRainTail * 3.00;
-  const meltingZdr = mixJS(0.22, 1.55, smoothstepJS(0.45, 1.55, size)) + flattening * 0.82 + meltingTail * 0.22;
-  const wetHailZdr = mixJS(-0.10, 0.70, smoothstepJS(0.70, 2.00, size)) + flattening * 0.35;
-  const snowZdr = mixJS(0.02, 0.22, smoothstepJS(0.50, 1.80, size));
-  const graupelZdr = mixJS(-0.10, 0.08, smoothstepJS(0.55, 1.60, size));
-  const hailZdr = -mixJS(0.05, 0.70, smoothstepJS(0.75, 2.40, size));
+  const largeRainTail = smoothstepJS(3.0, 5.5, diameterMm);
+  const giantRainTail = smoothstepJS(5.0, 7.5, diameterMm);
+  const meltingTail = smoothstepJS(3.0, 6.0, diameterMm);
+  const rainZdr = mixJS(0.12, 2.45, smoothstepJS(0.8, 4.5, diameterMm)) + flattening * 1.10 + largeRainTail * 0.78 + giantRainTail * 3.00;
+  const meltingZdr = mixJS(0.22, 1.55, smoothstepJS(1.0, 6.0, diameterMm)) + flattening * 0.82 + meltingTail * 0.22;
+  const wetHailZdr = mixJS(-0.10, 0.70, smoothstepJS(5.0, 25.0, diameterMm)) + flattening * 0.35;
+  const snowZdr = mixJS(0.02, 0.22, smoothstepJS(1.0, 10.0, diameterMm));
+  const graupelZdr = mixJS(-0.10, 0.08, smoothstepJS(1.5, 8.0, diameterMm));
+  const hailZdr = -mixJS(0.05, 0.70, smoothstepJS(5.0, 30.0, diameterMm));
 
   let targetZdrDb = hydro.rain * rainZdr +
                     hydro.snow * snowZdr +
@@ -1570,14 +1575,14 @@ function calcDropletRadarMetrics(waterMass, iceMass, density, size, compactness 
   const zh = baseMoment * (2.0 * zdrRatio / (1.0 + zdrRatio));
   const zv = baseMoment * (2.0 / (1.0 + zdrRatio));
 
-  const hSize = size * (1.0 + flattening * 0.60);
-  const vSize = size * Math.max(1.0 - flattening * 0.75, 0.55);
+  const hSize = diameterMm * (1.0 + flattening * 0.60);
+  const vSize = diameterMm * Math.max(1.0 - flattening * 0.75, 0.55);
   const particleRho = clamp01(
-    hydro.rain * mixJS(0.992, 0.986, smoothstepJS(0.50, 1.80, size)) +
-    hydro.snow * mixJS(0.985, 0.974, smoothstepJS(0.35, 1.30, size)) +
-    hydro.graupel * mixJS(0.964, 0.940, smoothstepJS(0.40, 1.60, size)) +
-    hydro.hail * mixJS(0.950, 0.900, smoothstepJS(0.55, 1.90, size)) +
-    hydro.wetHail * mixJS(0.930, 0.840, smoothstepJS(0.55, 1.90, size)) +
+    hydro.rain * mixJS(0.992, 0.986, smoothstepJS(1.0, 6.0, diameterMm)) +
+    hydro.snow * mixJS(0.985, 0.974, smoothstepJS(1.0, 10.0, diameterMm)) +
+    hydro.graupel * mixJS(0.964, 0.940, smoothstepJS(1.5, 8.0, diameterMm)) +
+    hydro.hail * mixJS(0.950, 0.900, smoothstepJS(5.0, 30.0, diameterMm)) +
+    hydro.wetHail * mixJS(0.930, 0.840, smoothstepJS(5.0, 30.0, diameterMm)) +
     hydro.melting * mixJS(0.940, 0.870, smoothstepJS(0.10, 0.45, liquidFraction)) -
     hydro.rain * flattening * 0.04
   );
@@ -8780,7 +8785,7 @@ var soundingGraph = {
       rainDrops.push(-10.0 + Math.random()); // water negative to disable
       rainDrops.push(Math.random());         // ice
       rainDrops.push(Math.random());         // density
-      rainDrops.push(0.0);                   // size proxy
+      rainDrops.push(0.0);                   // diameter in mm
       rainDrops.push(0.0);                   // compactness / ice-structure memory
     }
   }
@@ -8961,7 +8966,7 @@ var soundingGraph = {
         console.log('water:', water);
         console.log('Ice:', ice);
         console.log('Density:', density);
-        console.log('Size:', size);
+        console.log('Size mm:', size);
         console.log('Compactness:', compactness);
         console.log('Zh:', radarMetrics.zh);
         console.log('Zv:', radarMetrics.zv);
@@ -10461,7 +10466,7 @@ var soundingGraph = {
       ctx.fillStyle = '#00FF00';
       ctx.fillText('Dens: ' + dropletInfo[4].toFixed(2), 0, 42);
       ctx.fillStyle = '#FFD400';
-      ctx.fillText('Size: ' + dropletInfo[5].toFixed(2), 0, 56);
+      ctx.fillText('Size mm: ' + dropletInfo[5].toFixed(2), 0, 56);
       ctx.fillStyle = '#B8B8FF';
       ctx.fillText('Comp: ' + dropletInfo[6].toFixed(2), 0, 70);
       ctx.fillStyle = '#FF8A00';

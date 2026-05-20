@@ -7,7 +7,7 @@ layout(location = 2) in float density;
 layout(location = 3) in float size;
 layout(location = 4) in float compactness;
 
-out vec4 data_out; // liquid, ice, density, size
+out vec4 data_out; // liquid, ice, density, diameter mm
 out float compactness_out;
 
 uniform vec2 resolution;

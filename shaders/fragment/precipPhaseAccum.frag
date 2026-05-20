@@ -1,7 +1,7 @@
 #version 300 es
 precision highp float;
 
-in vec4 data_out; // liquid, ice, density, size
+in vec4 data_out; // liquid, ice, density, diameter mm
 in float compactness_out;
 layout(location = 0) out vec4 phaseOut0; // R liquid sum, G ice sum, B compactness sum, A hail shaft sum
 layout(location = 1) out vec4 phaseOut1; // R rho_i sum, G rho_i^2 sum, B compactness sum, A irregularity sum
@@ -19,14 +19,15 @@ void hydrometeorMemberships(float liquid, float ice, float density, float size, 
   float liquidFraction = liquid / max(total, 1e-6);
   float iceFraction = ice / max(total, 1e-6);
   float compact = clamp(compactness, 0.0, 1.0);
+  float diameterMm = max(size, 0.0);
   float dryIce = smoothstep(0.60, 0.98, iceFraction) * (1.0 - smoothstep(0.04, 0.20, liquidFraction));
 
   float rain = smoothstep(0.82, 0.995, liquidFraction) * (1.0 - smoothstep(0.05, 0.35, iceFraction));
   float wetHail = smoothstep(0.65, 0.98, iceFraction) * smoothstep(0.06, 0.35, liquidFraction) * smoothstep(0.78, 1.00, density) *
-                  smoothstep(0.70, 1.00, compact) * smoothstep(0.55, 1.10, size);
-  float hail = dryIce * smoothstep(0.82, 1.00, density) * smoothstep(0.72, 1.00, compact) * smoothstep(0.55, 1.10, size) *
+                  smoothstep(0.70, 1.00, compact) * smoothstep(5.0, 15.0, diameterMm);
+  float hail = dryIce * smoothstep(0.82, 1.00, density) * smoothstep(0.72, 1.00, compact) * smoothstep(5.0, 15.0, diameterMm) *
                (1.0 - smoothstep(0.04, 0.16, liquidFraction)) * (1.0 - wetHail);
-  float graupel = dryIce * smoothstep(0.38, 0.82, density) * smoothstep(0.28, 0.78, compact) * smoothstep(0.30, 0.90, size) *
+  float graupel = dryIce * smoothstep(0.38, 0.82, density) * smoothstep(0.28, 0.78, compact) * smoothstep(1.2, 5.0, diameterMm) *
                   (1.0 - hail) * (1.0 - wetHail);
   float melting = smoothstep(0.04, 0.40, liquidFraction) * smoothstep(0.30, 0.98, iceFraction) *
                   (1.0 - smoothstep(0.76, 1.00, compact) * smoothstep(0.82, 1.00, density));
@@ -72,16 +73,17 @@ void main()
   float wetHailness = secondary.r;
   float meltingness = secondary.g;
 
-  float rainFlatten = clamp((size - 0.35) * 0.26, 0.0, 0.38);
-  float mixedFlatten = clamp((size - 0.45) * 0.14, 0.0, 0.16);
-  float snowFlatten = clamp((size - 0.55) * 0.05, 0.0, 0.05);
+  float diameterMm = max(size, 0.0);
+  float rainFlatten = clamp((diameterMm - 1.0) * 0.085, 0.0, 0.38);
+  float mixedFlatten = clamp((diameterMm - 2.0) * 0.035, 0.0, 0.16);
+  float snowFlatten = clamp((diameterMm - 3.0) * 0.008, 0.0, 0.05);
   float flattening = rainFlatten * rainness +
                      mixedFlatten * (meltingness * 0.55 + wetHailness * 0.18) +
                      snowFlatten * (snowness * 0.70 + graupelness * 0.35);
 
   float radarPresence = smoothstep(0.12, 0.35, total);
-  float waterSize = size * pow(max(liquidFraction, 0.0), 1.0 / 3.0);
-  float iceSize = size * pow(max(iceFraction, 0.0), 1.0 / 3.0);
+  float waterSize = diameterMm * pow(max(liquidFraction, 0.0), 1.0 / 3.0);
+  float iceSize = diameterMm * pow(max(iceFraction, 0.0), 1.0 / 3.0);
 
   float waterMoment = pow(max(waterSize * 0.58, 1e-4), 6.0);
   float iceDensity = clamp(density, 0.12, 1.0);
@@ -92,15 +94,15 @@ void main()
 
   float brightBand = meltingness * 0.08 + wetHailness * 0.05;
 
-  float largeRainTail = smoothstep(1.55, 2.70, size);
-  float giantRainTail = smoothstep(2.05, 3.00, size);
-  float meltingTail = smoothstep(1.45, 2.30, size);
-  float rainZdr = mix(0.12, 2.45, smoothstep(0.45, 1.55, size)) + flattening * 1.10 + largeRainTail * 0.78 + giantRainTail * 3.00;
-  float meltingZdr = mix(0.22, 1.55, smoothstep(0.45, 1.55, size)) + flattening * 0.82 + meltingTail * 0.22;
-  float wetHailZdr = mix(-0.10, 0.70, smoothstep(0.70, 2.00, size)) + flattening * 0.35;
-  float snowZdr = mix(0.02, 0.22, smoothstep(0.50, 1.80, size));
-  float graupelZdr = mix(-0.10, 0.08, smoothstep(0.55, 1.60, size));
-  float hailZdr = -mix(0.05, 0.70, smoothstep(0.75, 2.40, size));
+  float largeRainTail = smoothstep(3.0, 5.5, diameterMm);
+  float giantRainTail = smoothstep(5.0, 7.5, diameterMm);
+  float meltingTail = smoothstep(3.0, 6.0, diameterMm);
+  float rainZdr = mix(0.12, 2.45, smoothstep(0.8, 4.5, diameterMm)) + flattening * 1.10 + largeRainTail * 0.78 + giantRainTail * 3.00;
+  float meltingZdr = mix(0.22, 1.55, smoothstep(1.0, 6.0, diameterMm)) + flattening * 0.82 + meltingTail * 0.22;
+  float wetHailZdr = mix(-0.10, 0.70, smoothstep(5.0, 25.0, diameterMm)) + flattening * 0.35;
+  float snowZdr = mix(0.02, 0.22, smoothstep(1.0, 10.0, diameterMm));
+  float graupelZdr = mix(-0.10, 0.08, smoothstep(1.5, 8.0, diameterMm));
+  float hailZdr = -mix(0.05, 0.70, smoothstep(5.0, 30.0, diameterMm));
 
   float targetZdrDb = rainness * rainZdr +
                       snowness * snowZdr +
@@ -116,11 +118,11 @@ void main()
   float zv = baseMoment * (2.0 / (1.0 + zdrRatio));
 
   float particleRho = clamp(
-    rainness * mix(0.992, 0.986, smoothstep(0.50, 1.80, size)) +
-    snowness * mix(0.985, 0.974, smoothstep(0.35, 1.30, size)) +
-    graupelness * mix(0.964, 0.940, smoothstep(0.40, 1.60, size)) +
-    hailness * mix(0.950, 0.900, smoothstep(0.55, 1.90, size)) +
-    wetHailness * mix(0.930, 0.840, smoothstep(0.55, 1.90, size)) +
+    rainness * mix(0.992, 0.986, smoothstep(1.0, 6.0, diameterMm)) +
+    snowness * mix(0.985, 0.974, smoothstep(1.0, 10.0, diameterMm)) +
+    graupelness * mix(0.964, 0.940, smoothstep(1.5, 8.0, diameterMm)) +
+    hailness * mix(0.950, 0.900, smoothstep(5.0, 30.0, diameterMm)) +
+    wetHailness * mix(0.930, 0.840, smoothstep(5.0, 30.0, diameterMm)) +
     meltingness * mix(0.940, 0.870, smoothstep(0.10, 0.45, liquidFraction)) -
     rainness * flattening * 0.04,
     0.0, 1.0
@@ -129,7 +131,7 @@ void main()
   float hv = particleRho * sqrt(max(zh * zv, 0.0));
   float irregularity = graupelness * 0.45 + hailness * 0.70 + wetHailness * 1.00 + meltingness * 0.85;
   float hailShaft = (hailness + wetHailness * 0.80) * total *
-                    smoothstep(0.50, 1.15, size) *
+                    smoothstep(5.0, 15.0, diameterMm) *
                     smoothstep(0.76, 1.00, density);
 
   phaseOut0 = vec4(liquid, ice, compactness, hailShaft);
