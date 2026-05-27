@@ -18,22 +18,18 @@ out vec4 fragmentColor;
 
 vec3 sizeColor(float particleSize)
 {
-  const int n = 13;
-  float levels[n] = float[n](0.0, 0.25, 0.50, 1.00, 2.00, 3.00, 5.00, 8.00, 12.00, 20.00, 30.00, 40.00, 50.00);
+  const int n = 9;
+  float levels[n] = float[n](0.0, 0.5, 1.0, 2.0, 4.0, 8.0, 15.0, 30.0, 50.0);
   vec3 cols[n] = vec3[n](
-    vec3(50, 120, 255) / 255.0,
-    vec3(60, 210, 255) / 255.0,
-    vec3(70, 245, 190) / 255.0,
-    vec3(110, 255, 90) / 255.0,
-    vec3(225, 255, 70) / 255.0,
-    vec3(255, 205, 50) / 255.0,
-    vec3(255, 145, 40) / 255.0,
-    vec3(255, 80, 60) / 255.0,
-    vec3(255, 40, 150) / 255.0,
-    vec3(205, 60, 255) / 255.0,
-    vec3(180, 90, 255) / 255.0,
-    vec3(220, 180, 255) / 255.0,
-    vec3(255, 230, 255) / 255.0
+    vec3(0, 38, 140) / 255.0,
+    vec3(65, 190, 255) / 255.0,
+    vec3(0, 220, 210) / 255.0,
+    vec3(70, 220, 80) / 255.0,
+    vec3(255, 235, 50) / 255.0,
+    vec3(255, 150, 35) / 255.0,
+    vec3(255, 45, 35) / 255.0,
+    vec3(255, 75, 180) / 255.0,
+    vec3(255, 255, 255) / 255.0
   );
 
   particleSize = clamp(particleSize, levels[0], levels[n - 1]);
@@ -63,10 +59,13 @@ void hydrometeorMemberships(float liquid, float ice, float density, float size, 
 
   float rain = smoothstep(0.82, 0.995, liquidFraction) * (1.0 - smoothstep(0.05, 0.35, iceFraction));
   float wetHail = smoothstep(0.65, 0.98, iceFraction) * smoothstep(0.06, 0.35, liquidFraction) * smoothstep(0.78, 1.00, density) *
-                  smoothstep(0.70, 1.00, compact) * smoothstep(5.0, 15.0, diameterMm);
-  float hail = dryIce * smoothstep(0.82, 1.00, density) * smoothstep(0.72, 1.00, compact) * smoothstep(5.0, 15.0, diameterMm) *
+                  smoothstep(0.58, 0.88, compact) * smoothstep(3.5, 12.0, diameterMm);
+  float classicHail = smoothstep(0.82, 1.00, density) * smoothstep(0.62, 0.92, compact) * smoothstep(3.5, 12.0, diameterMm);
+  float denseSmallHail = smoothstep(0.86, 1.00, density) * smoothstep(0.42, 0.58, compact) * smoothstep(1.5, 2.5, diameterMm);
+  float hail = dryIce * max(classicHail, denseSmallHail) *
                (1.0 - smoothstep(0.04, 0.16, liquidFraction)) * (1.0 - wetHail);
-  float graupel = dryIce * smoothstep(0.38, 0.82, density) * smoothstep(0.28, 0.78, compact) * smoothstep(1.2, 5.0, diameterMm) *
+  float graupelSizeGate = smoothstep(1.2, 3.0, diameterMm) * (1.0 - smoothstep(4.5, 5.0, diameterMm));
+  float graupel = dryIce * smoothstep(0.38, 0.82, density) * smoothstep(0.28, 0.78, compact) * graupelSizeGate *
                   (1.0 - hail) * (1.0 - wetHail);
   float melting = smoothstep(0.04, 0.40, liquidFraction) * smoothstep(0.30, 0.98, iceFraction) *
                   (1.0 - smoothstep(0.76, 1.00, compact) * smoothstep(0.82, 1.00, density));
