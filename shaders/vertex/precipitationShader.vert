@@ -90,14 +90,19 @@ float calcHydrometeorSize(vec2 hydromass, float hydrodensity, float hydroCompact
   float waterEquivalentDiameterMm = pow(totalMass, 1.0 / 3.0) * hydrometeorDiameterMmPerMassCubeRoot;
 
   float snowiness = clamp((0.72 - clampedDensity) / 0.42, 0.0, 1.0) * (1.0 - smoothstep(0.28, 0.72, clampedCompactness));
-  float hailness = smoothstep(0.72, 0.98, clampedCompactness) * smoothstep(0.55, 0.95, iceFraction);
+  float compactHailness = smoothstep(0.72, 0.98, clampedCompactness) * smoothstep(0.55, 0.95, iceFraction);
+  float denseRimedHailness = smoothstep(0.84, 1.0, clampedDensity) *
+                             smoothstep(1.6, 2.2, waterEquivalentDiameterMm) *
+                             smoothstep(0.42, 0.55, clampedCompactness) *
+                             smoothstep(0.70, 0.96, iceFraction);
+  float hailness = max(compactHailness, denseRimedHailness);
   float graupelness = smoothstep(0.28, 0.68, clampedCompactness) * (1.0 - hailness) * smoothstep(0.45, 0.95, iceFraction);
 
   // Ordinary snow should stay relatively small, aggregates only modestly larger,
   // while dense ice / hail can exceed rain size.
   float drySnowScale = mix(0.88, 1.10, snowiness);
   float graupelScale = mix(drySnowScale, 1.14, graupelness);
-  float hailScale = mix(1.00, 1.32, hailness);
+  float hailScale = 1.00 + hailness * hailness * 4.00;
   float iceScale = mix(graupelScale, hailScale, hailness);
 
   // Keep the melting layer transition gentle so particles do not collapse in size
@@ -256,13 +261,30 @@ void main()
       float growth = water[CLOUD] * growthRate * surfaceArea;
 
       float hailAccretion = 0.0;
+      float hailRiming = 0.0;
       float freezing = 0.0;
       float melting = 0.0;
 
-      // Hail growth enhancement:
-      if (realTemp < CtoK(0.0) && water[CLOUD] > 0.0 && newMass[ICE] > 0.0 && newDensity > 0.78 && newCompactness > 0.70) { // below freezing
-        hailAccretion = surfaceArea * water[PRECIPITATION] * 0.0030;
-        growth += hailAccretion;                                           // rain freezing onto hail
+      // Hail growth enhancement: limited riming from supercooled cloud water.
+      if (realTemp < CtoK(0.0) && newMass[ICE] > 0.0) {
+        float cloudExcess = max(water[CLOUD] - 0.75, 0.0);
+        float updraftFactor = smoothstep(0.015, 0.12, base[VY]);
+        float hailTempFactor = (1.0 - smoothstep(CtoK(-6.0), CtoK(0.0), realTemp)) *
+                               smoothstep(CtoK(-45.0), CtoK(-30.0), realTemp);
+        float rimingSeed = smoothstep(0.08, 0.45, newMass[ICE]) *
+                           smoothstep(1.5, 4.5, max(newSize, 0.0));
+        hailRiming = cloudExcess * updraftFactor * hailTempFactor * rimingSeed;
+
+        float hailCandidate = rimingSeed *
+                              smoothstep(0.35, 0.75, newDensity) *
+                              smoothstep(3.0, 6.0, max(newSize, 0.0));
+
+        hailAccretion = cloudExcess * surfaceArea * 0.0025 * updraftFactor * hailTempFactor * hailCandidate;
+        hailAccretion = min(hailAccretion, totalMass * 0.025);
+        hailAccretion = min(hailAccretion, cloudExcess * 0.035);
+        float densityRimingRate = clamp(hailRiming * 0.004 + hailAccretion / max(totalMass, 1e-6) * 0.35, 0.0, 0.018);
+        newDensity = mix(newDensity, 0.92, densityRimingRate);
+        growth += hailAccretion;
       }
 
       feedback[VAPOR] -= growth * 1.0; // takes water from the air
@@ -320,6 +342,11 @@ void main()
           float growthNorm = growth / massNorm;
           float freezingNorm = freezing / massNorm;
           float hailNorm = hailAccretion / massNorm;
+          float largeDenseIce = smoothstep(0.84, 1.0, newDensity) *
+                                smoothstep(1.8, 2.8, max(newSize, 0.0)) *
+                                smoothstep(0.70, 0.96, newMass[ICE] / max(totalMassPost, 1e-6)) *
+                                (1.0 - smoothstep(0.10, 0.25, liquidFractionPost));
+          float rimingSignal = max(clamp(hailRiming * 0.20, 0.0, 1.0), largeDenseIce * 0.75);
           float dryIceCore = smoothstep(0.90, 0.995, newMass[ICE] / max(totalMassPost, 1e-6)) *
                              (1.0 - smoothstep(0.02, 0.12, liquidFractionPost)) *
                              smoothstep(0.82, 1.00, newDensity);
@@ -329,11 +356,13 @@ void main()
             smoothstep(0.45, 0.98, newDensity) * 0.38 +
             growthNorm * 0.15 +
             freezingNorm * 0.55 +
+            rimingSignal * 0.30 +
+            largeDenseIce * 0.26 +
             hailNorm * 1.30 +
             hailCoreBoost * 0.42,
             0.05, 1.0
           );
-          float compactnessRate = clamp(0.04 + freezingNorm * 0.80 + hailNorm * 1.15 + hailCoreBoost * 0.28, 0.0, 1.0);
+          float compactnessRate = clamp(0.04 + freezingNorm * 0.80 + rimingSignal * 0.12 + largeDenseIce * 0.06 + hailNorm * 1.15 + hailCoreBoost * 0.28, 0.0, 1.0);
           newCompactness = mix(newCompactness, compactnessTarget, compactnessRate);
           newCompactness = max(newCompactness, hailCoreBoost * mix(0.58, 0.92, hailCoreBoost));
           if (newMass[WATER] <= 1e-6 && newDensity < 0.55)
@@ -367,7 +396,15 @@ void main()
       // Update position
       // move with air    * 2. because droplet position goes from -1. to 1
       newPos += base.xy / resolution * 2.;
-      newPos.y -= fallSpeed * newDensity * sqrt(totalMass / surfaceArea); // fall speed relative to air
+      float fallMass = max(newMass[WATER] + newMass[ICE], 1e-6);
+      float fallSurfaceArea = max(pow(fallMass, 1.0 / 3.0), 1e-6);
+      float legacyFallSpeed = fallSpeed * newDensity * sqrt(fallMass / fallSurfaceArea);
+      float terminalDensityFall = mix(0.45, 1.25, clamp(newDensity, 0.0, 1.0));
+      float terminalSizeFall = mix(0.65, 2.20, smoothstep(1.0, 25.0, max(newSize, 0.0)));
+      float hailDrag = mix(1.0, 0.72, smoothstep(5.0, 25.0, max(newSize, 0.0)) * smoothstep(0.65, 1.0, newCompactness));
+      float terminalFallSpeed = fallSpeed * terminalDensityFall * terminalSizeFall * hailDrag;
+      float terminalBlend = smoothstep(5.0, 15.0, max(newSize, 0.0)) * smoothstep(0.55, 0.95, newDensity);
+      newPos.y -= mix(legacyFallSpeed, terminalFallSpeed, terminalBlend); // fall speed relative to air
       /*
        // falling at fixed speed:
       float cellHeight = texelSize.y * 12000.0; // in meters
