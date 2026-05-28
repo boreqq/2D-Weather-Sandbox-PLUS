@@ -1014,17 +1014,13 @@ function parseRadarPaletteFile(text, productId, sourceFilename)
   };
 }
 
-const DRY_HAIL_REFLECTIVITY_COEFF = 0.00005;
-const WET_HAIL_REFLECTIVITY_COEFF_MIN = 0.0;
-const WET_HAIL_REFLECTIVITY_COEFF_MAX = 0.01;
-const WET_HAIL_REFLECTIVITY_COEFF_STEP = 0.00001;
-const MELTING_REFLECTIVITY_COEFF_MIN = 0.0;
-const MELTING_REFLECTIVITY_COEFF_MAX = 0.01;
-const MELTING_REFLECTIVITY_COEFF_STEP = 0.00001;
-const HAIL_LIQUID_MOMENT_COEFF = 0.01;
-const WET_HAIL_LIQUID_MOMENT_COEFF = 0.02;
-const MELTING_LIQUID_MOMENT_COEFF = 0.05;
-const FROZEN_LIQUID_MOMENT_COEFF = 0.03;
+const LIQUID_RADAR_SIZE_SCALE = 0.58;
+const ICE_RADAR_SIZE_SCALE_MIN = 0.42;
+const ICE_RADAR_SIZE_SCALE_MAX = 0.60;
+const MIXED_LIQUID_MOMENT_COEFF = 0.005;
+const FREE_LIQUID_MOMENT_COEFF = 1.0;
+const LIGHT_ICE_REFLECTIVITY_COEFF = 0.14;
+const DENSE_ICE_REFLECTIVITY_COEFF = 0.00005;
 
 const guiControls_default = {
   vorticity : 0.005,
@@ -1084,9 +1080,6 @@ const guiControls_default = {
   debugReflectivity : false,
   reflectivityGain : 0.0,
   reflectivityBoost : 10000.0,
-  wetHailReflectivityCoeff : 0.00005,
-  meltingReflectivityCoeff : 0.001,
-  radarHailCoeffCalibrationVersion : 2,
   reflectivityPixelSize : 8,
   radarShowRangeRings : false,
   radarAttenuationEnabled : true,
@@ -1564,25 +1557,16 @@ function calcDropletRadarMetrics(waterMass, iceMass, density, size, compactness 
   const waterSize = diameterMm * Math.pow(Math.max(liquidFraction, 0.0), 1.0 / 3.0);
   const iceSize = diameterMm * Math.pow(Math.max(iceFraction, 0.0), 1.0 / 3.0);
 
-  const liquidMomentCoeff = clamp01(
-    hydro.rain +
-    (hydro.snow + hydro.graupel) * FROZEN_LIQUID_MOMENT_COEFF +
-    hydro.hail * HAIL_LIQUID_MOMENT_COEFF +
-    hydro.wetHail * WET_HAIL_LIQUID_MOMENT_COEFF +
-    hydro.melting * MELTING_LIQUID_MOMENT_COEFF
-  );
-  const waterMoment = Math.pow(Math.max(waterSize * 0.58, 1e-4), 6.0) * liquidMomentCoeff;
+  const freeLiquidFactor = smoothstepJS(0.30, 0.90, liquidFraction);
+  const liquidMomentCoeff = mixJS(MIXED_LIQUID_MOMENT_COEFF, FREE_LIQUID_MOMENT_COEFF, freeLiquidFactor);
+  const waterMoment = Math.pow(Math.max(waterSize * LIQUID_RADAR_SIZE_SCALE, 1e-4), 6.0) * liquidMomentCoeff;
   const iceDensity = Math.min(Math.max(density, 0.12), 1.0);
   const aggregateBoost = mixJS(1.42, 1.08, clamp01(0.35 * compactness + 0.65 * iceDensity));
-  const iceRadarSize = iceSize * ((0.42 * (1.0 - iceDensity)) + (0.60 * iceDensity)) * aggregateBoost;
-  const wetHailCoeffRaw = guiControls ? Number(guiControls.wetHailReflectivityCoeff) : guiControls_default.wetHailReflectivityCoeff;
-  const wetHailCoeff = Number.isFinite(wetHailCoeffRaw) ? clampNumber(wetHailCoeffRaw, WET_HAIL_REFLECTIVITY_COEFF_MIN, WET_HAIL_REFLECTIVITY_COEFF_MAX) :
-                                                          guiControls_default.wetHailReflectivityCoeff;
-  const meltingCoeffRaw = guiControls ? Number(guiControls.meltingReflectivityCoeff) : guiControls_default.meltingReflectivityCoeff;
-  const meltingCoeff = Number.isFinite(meltingCoeffRaw) ? clampNumber(meltingCoeffRaw, MELTING_REFLECTIVITY_COEFF_MIN, MELTING_REFLECTIVITY_COEFF_MAX) :
-                                                          guiControls_default.meltingReflectivityCoeff;
-  const iceCoeff =
-    hydro.snow * 0.14 + hydro.graupel * 0.20 + hydro.hail * DRY_HAIL_REFLECTIVITY_COEFF + hydro.wetHail * wetHailCoeff + hydro.melting * meltingCoeff;
+  const iceRadarSize = iceSize * mixJS(ICE_RADAR_SIZE_SCALE_MIN, ICE_RADAR_SIZE_SCALE_MAX, iceDensity) * aggregateBoost;
+  const denseIceFactor = smoothstepJS(0.72, 0.90, iceDensity) *
+                         smoothstepJS(0.35, 0.65, compactness) *
+                         smoothstepJS(2.0, 8.0, diameterMm);
+  const iceCoeff = mixJS(LIGHT_ICE_REFLECTIVITY_COEFF, DENSE_ICE_REFLECTIVITY_COEFF, denseIceFactor);
   const iceMoment = iceCoeff * Math.pow(Math.max(iceRadarSize, 1e-4), 6.0);
 
   const brightBand = hydro.melting * 0.08 + hydro.wetHail * 0.05;
@@ -5358,11 +5342,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     gl.uniform1f(gl.getUniformLocation(precipitationProgram, 'freezingRate'), guiControls.freezingRate);
     gl.uniform1f(gl.getUniformLocation(precipitationProgram, 'meltingRate'), guiControls.meltingRate);
     gl.uniform1f(gl.getUniformLocation(precipitationProgram, 'evapRate'), guiControls.evapRate);
-    gl.useProgram(precipPhaseAccumProgram);
-    gl.uniform1f(gl.getUniformLocation(precipPhaseAccumProgram, 'wetHailReflectivityCoeff'),
-                 clampNumber(Number(guiControls.wetHailReflectivityCoeff) || 0.0, WET_HAIL_REFLECTIVITY_COEFF_MIN, WET_HAIL_REFLECTIVITY_COEFF_MAX));
-    gl.uniform1f(gl.getUniformLocation(precipPhaseAccumProgram, 'meltingReflectivityCoeff'),
-                 clampNumber(Number(guiControls.meltingReflectivityCoeff) || 0.0, MELTING_REFLECTIVITY_COEFF_MIN, MELTING_REFLECTIVITY_COEFF_MAX));
     gl.useProgram(postProcessingProgram);
     gl.uniform1f(gl.getUniformLocation(postProcessingProgram, 'exposure'), guiControls.exposure);
   }
@@ -5421,27 +5400,12 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     guiControls = JSON.parse(strGuiControls); // load settings object
     const hadSavedSelectedRadarProduct = guiControls.selectedRadarProduct !== undefined;
     const hadSavedLastLiveRadarProduct = guiControls.lastLiveRadarProduct !== undefined;
-    const savedHailCoeffCalibrationVersion = Number(guiControls.radarHailCoeffCalibrationVersion) || 0;
 
     for (const [key, value] of Object.entries(guiControls_default)) {
       if (guiControls[key] === undefined) {
         guiControls[key] = cloneGuiValue(value);
       }
     }
-
-    const wetHailCoeff = Number(guiControls.wetHailReflectivityCoeff);
-    guiControls.wetHailReflectivityCoeff = Number.isFinite(wetHailCoeff) ?
-      clampNumber(wetHailCoeff, WET_HAIL_REFLECTIVITY_COEFF_MIN, WET_HAIL_REFLECTIVITY_COEFF_MAX) :
-      guiControls_default.wetHailReflectivityCoeff;
-    if (savedHailCoeffCalibrationVersion < 2 && guiControls.wetHailReflectivityCoeff == 0.0001)
-      guiControls.wetHailReflectivityCoeff = guiControls_default.wetHailReflectivityCoeff;
-    const meltingCoeff = Number(guiControls.meltingReflectivityCoeff);
-    guiControls.meltingReflectivityCoeff = Number.isFinite(meltingCoeff) ?
-      clampNumber(meltingCoeff, MELTING_REFLECTIVITY_COEFF_MIN, MELTING_REFLECTIVITY_COEFF_MAX) :
-      guiControls_default.meltingReflectivityCoeff;
-    if (savedHailCoeffCalibrationVersion < 2 && guiControls.meltingReflectivityCoeff == 0.003)
-      guiControls.meltingReflectivityCoeff = guiControls_default.meltingReflectivityCoeff;
-    guiControls.radarHailCoeffCalibrationVersion = guiControls_default.radarHailCoeffCalibrationVersion;
 
     guiControls.radarPaletteState = normalizeRadarPaletteState(guiControls.radarPaletteState);
     guiControls.tool = 'TOOL_NONE';
@@ -5941,20 +5905,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     var reflectivity_folder = datGui.addFolder('Reflectivity');
     reflectivity_folder.add(guiControls, 'reflectivityBackground').onChange(handleRadarUiExternalChange).name('Reflectivity Background').listen();
     reflectivity_folder.add(guiControls, 'debugReflectivity').onChange(handleRadarUiExternalChange).name('Debug dBZ at Cursor').listen();
-    reflectivity_folder.add(guiControls, 'wetHailReflectivityCoeff', WET_HAIL_REFLECTIVITY_COEFF_MIN, WET_HAIL_REFLECTIVITY_COEFF_MAX, WET_HAIL_REFLECTIVITY_COEFF_STEP)
-      .name('Wet Hail Reflectivity')
-      .onChange(function() {
-        applyWetHailReflectivityCoeff(guiControls.wetHailReflectivityCoeff);
-        handleRadarUiExternalChange();
-      })
-      .listen();
-    reflectivity_folder.add(guiControls, 'meltingReflectivityCoeff', MELTING_REFLECTIVITY_COEFF_MIN, MELTING_REFLECTIVITY_COEFF_MAX, MELTING_REFLECTIVITY_COEFF_STEP)
-      .name('Melting Reflectivity')
-      .onChange(function() {
-        applyMeltingReflectivityCoeff(guiControls.meltingReflectivityCoeff);
-        handleRadarUiExternalChange();
-      })
-      .listen();
     reflectivity_folder.add(guiControls, 'reflectivityPixelSize', 1, 32, 1)
       .name('Reflectivity Pixel Size')
       .onChange(function() {
@@ -6551,28 +6501,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     updateRadarTimingDatGuiControls();
   }
 
-  function applyWetHailReflectivityCoeff(value)
-  {
-    const numericValue = Number(value);
-    if (!Number.isFinite(numericValue))
-      return;
-    guiControls.wetHailReflectivityCoeff = clampNumber(numericValue, WET_HAIL_REFLECTIVITY_COEFF_MIN, WET_HAIL_REFLECTIVITY_COEFF_MAX);
-    gl.useProgram(precipPhaseAccumProgram);
-    gl.uniform1f(gl.getUniformLocation(precipPhaseAccumProgram, 'wetHailReflectivityCoeff'), guiControls.wetHailReflectivityCoeff);
-    lastReflectivitySnapshotTime = -Infinity;
-  }
-
-  function applyMeltingReflectivityCoeff(value)
-  {
-    const numericValue = Number(value);
-    if (!Number.isFinite(numericValue))
-      return;
-    guiControls.meltingReflectivityCoeff = clampNumber(numericValue, MELTING_REFLECTIVITY_COEFF_MIN, MELTING_REFLECTIVITY_COEFF_MAX);
-    gl.useProgram(precipPhaseAccumProgram);
-    gl.uniform1f(gl.getUniformLocation(precipPhaseAccumProgram, 'meltingReflectivityCoeff'), guiControls.meltingReflectivityCoeff);
-    lastReflectivitySnapshotTime = -Infinity;
-  }
-
   function appendRadarToggleControl(parent, label, description, checked, onChange)
   {
     const wrapper = document.createElement('label');
@@ -7110,28 +7038,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         guiControls.debugReflectivity,
         function(checked) { guiControls.debugReflectivity = checked; }
       );
-      appendRadarTextControl(radarSettingsContentEl, {
-        label : 'Wet Hail Reflectivity',
-        description : 'Coefficient for wet hail contribution to reflectivity.',
-        type : 'number',
-        min : String(WET_HAIL_REFLECTIVITY_COEFF_MIN),
-        max : String(WET_HAIL_REFLECTIVITY_COEFF_MAX),
-        step : String(WET_HAIL_REFLECTIVITY_COEFF_STEP),
-        value : String(guiControls.wetHailReflectivityCoeff),
-        placeholder : '0.00005',
-        onInput : function(value) { applyWetHailReflectivityCoeff(value); },
-      });
-      appendRadarTextControl(radarSettingsContentEl, {
-        label : 'Melting Reflectivity',
-        description : 'Coefficient for mixed melting ice contribution to reflectivity.',
-        type : 'number',
-        min : String(MELTING_REFLECTIVITY_COEFF_MIN),
-        max : String(MELTING_REFLECTIVITY_COEFF_MAX),
-        step : String(MELTING_REFLECTIVITY_COEFF_STEP),
-        value : String(guiControls.meltingReflectivityCoeff),
-        placeholder : '0.001',
-        onInput : function(value) { applyMeltingReflectivityCoeff(value); },
-      });
       appendRadarRangeControl(radarSettingsContentEl, {
         label : 'Pixel Size',
         description : 'Controls the blocky radar bin look.',
@@ -9865,10 +9771,6 @@ var soundingGraph = {
 
   gl.useProgram(precipPhaseAccumProgram);
   gl.uniform2f(gl.getUniformLocation(precipPhaseAccumProgram, 'resolution'), sim_res_x, sim_res_y);
-  gl.uniform1f(gl.getUniformLocation(precipPhaseAccumProgram, 'wetHailReflectivityCoeff'),
-               clampNumber(Number(guiControls.wetHailReflectivityCoeff) || 0.0, WET_HAIL_REFLECTIVITY_COEFF_MIN, WET_HAIL_REFLECTIVITY_COEFF_MAX));
-  gl.uniform1f(gl.getUniformLocation(precipPhaseAccumProgram, 'meltingReflectivityCoeff'),
-               clampNumber(Number(guiControls.meltingReflectivityCoeff) || 0.0, MELTING_REFLECTIVITY_COEFF_MIN, MELTING_REFLECTIVITY_COEFF_MAX));
 
   gl.useProgram(rhohvFieldProgram);
   gl.uniform2f(gl.getUniformLocation(rhohvFieldProgram, 'resolution'), sim_res_x, sim_res_y);

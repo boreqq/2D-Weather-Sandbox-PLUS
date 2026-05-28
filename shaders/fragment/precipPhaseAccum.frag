@@ -7,13 +7,13 @@ layout(location = 0) out vec4 phaseOut0; // R liquid sum, G ice sum, B compactne
 layout(location = 1) out vec4 phaseOut1; // R rho_i sum, G rho_i^2 sum, B compactness sum, A irregularity sum
 layout(location = 2) out vec4 radarOut;  // R Zh, G Zv, B HV, A count
 
-const float DRY_HAIL_REFLECTIVITY_COEFF = 0.00005;
-const float HAIL_LIQUID_MOMENT_COEFF = 0.01;
-const float WET_HAIL_LIQUID_MOMENT_COEFF = 0.02;
-const float MELTING_LIQUID_MOMENT_COEFF = 0.05;
-const float FROZEN_LIQUID_MOMENT_COEFF = 0.03;
-uniform float wetHailReflectivityCoeff;
-uniform float meltingReflectivityCoeff;
+const float LIQUID_RADAR_SIZE_SCALE = 0.58;
+const float ICE_RADAR_SIZE_SCALE_MIN = 0.42;
+const float ICE_RADAR_SIZE_SCALE_MAX = 0.60;
+const float MIXED_LIQUID_MOMENT_COEFF = 0.005;
+const float FREE_LIQUID_MOMENT_COEFF = 1.0;
+const float LIGHT_ICE_REFLECTIVITY_COEFF = 0.14;
+const float DENSE_ICE_REFLECTIVITY_COEFF = 0.00005;
 
 void hydrometeorMemberships(float liquid, float ice, float density, float size, float compactness, out vec4 primary, out vec2 secondary)
 {
@@ -96,20 +96,16 @@ void main()
   float waterSize = diameterMm * pow(max(liquidFraction, 0.0), 1.0 / 3.0);
   float iceSize = diameterMm * pow(max(iceFraction, 0.0), 1.0 / 3.0);
 
-  float liquidMomentCoeff = clamp(
-    rainness +
-    (snowness + graupelness) * FROZEN_LIQUID_MOMENT_COEFF +
-    hailness * HAIL_LIQUID_MOMENT_COEFF +
-    wetHailness * WET_HAIL_LIQUID_MOMENT_COEFF +
-    meltingness * MELTING_LIQUID_MOMENT_COEFF,
-    0.0, 1.0
-  );
-  float waterMoment = pow(max(waterSize * 0.58, 1e-4), 6.0) * liquidMomentCoeff;
+  float freeLiquidFactor = smoothstep(0.30, 0.90, liquidFraction);
+  float liquidMomentCoeff = mix(MIXED_LIQUID_MOMENT_COEFF, FREE_LIQUID_MOMENT_COEFF, freeLiquidFactor);
+  float waterMoment = pow(max(waterSize * LIQUID_RADAR_SIZE_SCALE, 1e-4), 6.0) * liquidMomentCoeff;
   float iceDensity = clamp(density, 0.12, 1.0);
   float aggregateBoost = mix(1.42, 1.08, clamp(0.35 * compactness + 0.65 * iceDensity, 0.0, 1.0));
-  float iceRadarSize = iceSize * mix(0.42, 0.60, iceDensity) * aggregateBoost;
-  float iceCoeff = snowness * 0.14 + graupelness * 0.20 + hailness * DRY_HAIL_REFLECTIVITY_COEFF + wetHailness * wetHailReflectivityCoeff +
-                   meltingness * meltingReflectivityCoeff;
+  float iceRadarSize = iceSize * mix(ICE_RADAR_SIZE_SCALE_MIN, ICE_RADAR_SIZE_SCALE_MAX, iceDensity) * aggregateBoost;
+  float denseIceFactor = smoothstep(0.72, 0.90, iceDensity) *
+                         smoothstep(0.35, 0.65, compactness) *
+                         smoothstep(2.0, 8.0, diameterMm);
+  float iceCoeff = mix(LIGHT_ICE_REFLECTIVITY_COEFF, DENSE_ICE_REFLECTIVITY_COEFF, denseIceFactor);
   float iceMoment = iceCoeff * pow(max(iceRadarSize, 1e-4), 6.0);
 
   float brightBand = meltingness * 0.08 + wetHailness * 0.05;
