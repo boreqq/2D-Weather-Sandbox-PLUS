@@ -47,12 +47,12 @@ void hydrometeorMemberships(float liquid, float ice, float density, float size, 
 
   float sum = rain + snow + graupel + hail + wetHail + melting;
   if (sum <= 1e-6) {
-    rain = step(ice, liquid);
-    snow = 1.0 - rain;
+    melting = step(1e-6, liquid) * step(1e-6, ice);
+    hail = (1.0 - melting) * step(1e-6, ice) * step(0.78, density) * step(0.55, compact);
+    rain = (1.0 - melting) * (1.0 - hail) * step(ice, liquid);
+    snow = (1.0 - melting) * (1.0 - hail) * (1.0 - rain);
     graupel = 0.0;
-    hail = 0.0;
     wetHail = 0.0;
-    melting = 0.0;
     sum = 1.0;
   }
 
@@ -102,9 +102,12 @@ void main()
   float iceDensity = clamp(density, 0.12, 1.0);
   float aggregateBoost = mix(1.42, 1.08, clamp(0.35 * compactness + 0.65 * iceDensity, 0.0, 1.0));
   float iceRadarSize = iceSize * mix(ICE_RADAR_SIZE_SCALE_MIN, ICE_RADAR_SIZE_SCALE_MAX, iceDensity) * aggregateBoost;
-  float denseIceFactor = smoothstep(0.72, 0.90, iceDensity) *
-                         smoothstep(0.35, 0.65, compactness) *
-                         smoothstep(2.0, 8.0, diameterMm);
+  float compactDenseIce = smoothstep(0.72, 0.90, iceDensity) *
+                          smoothstep(0.35, 0.65, compactness) *
+                          smoothstep(2.0, 8.0, diameterMm);
+  float densityDominantIce = smoothstep(0.84, 0.96, iceDensity) *
+                             smoothstep(4.0, 10.0, diameterMm);
+  float denseIceFactor = max(compactDenseIce, densityDominantIce);
   float iceCoeff = mix(LIGHT_ICE_REFLECTIVITY_COEFF, DENSE_ICE_REFLECTIVITY_COEFF, denseIceFactor);
   float iceMoment = iceCoeff * pow(max(iceRadarSize, 1e-4), 6.0);
 
