@@ -87,7 +87,13 @@ float calcHydrometeorSize(vec2 hydromass, float hydrodensity, float hydroCompact
   float clampedCompactness = clamp(hydroCompactness, 0.0, 1.0);
 
   // Size is stored as particle diameter in millimeters.
-  float waterEquivalentDiameterMm = pow(totalMass, 1.0 / 3.0) * hydrometeorDiameterMmPerMassCubeRoot;
+  float structureDensity = mix(0.30, 0.95,
+    smoothstep(0.25, 0.95, clampedDensity) *
+    smoothstep(0.20, 0.80, clampedCompactness)
+  );
+  float effectiveDensity = clamp(mix(structureDensity, 1.0, liquidFraction), 0.30, 1.0);
+  float volumeProxy = totalMass / effectiveDensity;
+  float waterEquivalentDiameterMm = pow(volumeProxy, 1.0 / 3.0) * hydrometeorDiameterMmPerMassCubeRoot;
 
   float snowiness = clamp((0.72 - clampedDensity) / 0.42, 0.0, 1.0) * (1.0 - smoothstep(0.28, 0.72, clampedCompactness));
   float compactHailness = smoothstep(0.72, 0.98, clampedCompactness) * smoothstep(0.55, 0.95, iceFraction);
@@ -102,7 +108,7 @@ float calcHydrometeorSize(vec2 hydromass, float hydrodensity, float hydroCompact
   // while dense ice / hail can exceed rain size.
   float drySnowScale = mix(0.88, 1.10, snowiness);
   float graupelScale = mix(drySnowScale, 1.14, graupelness);
-  float hailScale = 1.00 + hailness * hailness * 4.00;
+  float hailScale = 1.00 + hailness * hailness * 5.50;
   float iceScale = mix(graupelScale, hailScale, hailness);
 
   // Keep the melting layer transition gentle so particles do not collapse in size
