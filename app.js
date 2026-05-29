@@ -1414,7 +1414,13 @@ function calcHydrometeorSizeProxy(waterMass, iceMass, density, compactness = inf
   const liquidFraction = liquid / Math.max(totalMass, 1e-6);
   const clampedDensity = Math.min(Math.max(density, 0.12), 1.0);
   const clampedCompactness = clamp01(compactness);
-  const waterEquivalentDiameterMm = Math.pow(totalMass, 1.0 / 3.0) * hydrometeorDiameterMmPerMassCubeRoot;
+  const structureDensity = mixJS(0.30, 0.95,
+    smoothstepJS(0.25, 0.95, clampedDensity) *
+    smoothstepJS(0.20, 0.80, clampedCompactness)
+  );
+  const effectiveDensity = Math.min(Math.max(mixJS(structureDensity, 1.0, liquidFraction), 0.30), 1.0);
+  const volumeProxy = totalMass / effectiveDensity;
+  const waterEquivalentDiameterMm = Math.pow(volumeProxy, 1.0 / 3.0) * hydrometeorDiameterMmPerMassCubeRoot;
 
   const snowiness = clamp01((0.72 - clampedDensity) / 0.42) * (1.0 - smoothstepJS(0.28, 0.72, clampedCompactness));
   const compactHailness = smoothstepJS(0.72, 0.98, clampedCompactness) * smoothstepJS(0.55, 0.95, iceFraction);
@@ -1427,7 +1433,7 @@ function calcHydrometeorSizeProxy(waterMass, iceMass, density, compactness = inf
 
   const drySnowScale = mixJS(0.88, 1.10, snowiness);
   const graupelScale = mixJS(drySnowScale, 1.14, graupelness);
-  const hailScale = 1.00 + hailness * hailness * 4.00;
+  const hailScale = 1.00 + hailness * hailness * 5.50;
   const iceScale = mixJS(graupelScale, hailScale, hailness);
   const mixedScale = mixJS(iceScale, Math.max(1.00, 1.05 + hailness * 0.10), smoothstepJS(0.18, 0.88, liquidFraction));
 
