@@ -74,12 +74,12 @@ void hydrometeorMemberships(float liquid, float ice, float density, float size, 
 
   float sum = rain + snow + graupel + hail + wetHail + melting;
   if (sum <= 1e-6) {
-    rain = step(ice, liquid);
-    snow = 1.0 - rain;
+    melting = step(1e-6, liquid) * step(1e-6, ice);
+    hail = (1.0 - melting) * step(1e-6, ice) * step(0.78, density) * step(0.55, compact);
+    rain = (1.0 - melting) * (1.0 - hail) * step(ice, liquid);
+    snow = (1.0 - melting) * (1.0 - hail) * (1.0 - rain);
     graupel = 0.0;
-    hail = 0.0;
     wetHail = 0.0;
-    melting = 0.0;
     sum = 1.0;
   }
 

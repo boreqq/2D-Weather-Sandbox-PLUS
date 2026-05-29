@@ -1481,11 +1481,15 @@ function computeHydrometeorMemberships(waterMass, iceMass, density, size, compac
 
   const sum = rain + snow + graupel + hail + wetHail + melting;
   if (sum <= 1e-6) {
-    if (liquid >= ice)
+    if (liquid > 1e-6 && ice > 1e-6)
+      melting = 1.0;
+    else if (ice > 1e-6 && density >= 0.78 && compact >= 0.55)
+      hail = 1.0;
+    else if (liquid >= ice)
       rain = 1.0;
     else
       snow = 1.0;
-    return { rain, snow, graupel : 0.0, hail : 0.0, wetHail : 0.0, melting : 0.0 };
+    return { rain, snow, graupel, hail, wetHail, melting };
   }
 
   const inv = 1.0 / sum;
@@ -1569,9 +1573,12 @@ function calcDropletRadarMetrics(waterMass, iceMass, density, size, compactness 
   const iceDensity = Math.min(Math.max(density, 0.12), 1.0);
   const aggregateBoost = mixJS(1.42, 1.08, clamp01(0.35 * compactness + 0.65 * iceDensity));
   const iceRadarSize = iceSize * mixJS(ICE_RADAR_SIZE_SCALE_MIN, ICE_RADAR_SIZE_SCALE_MAX, iceDensity) * aggregateBoost;
-  const denseIceFactor = smoothstepJS(0.72, 0.90, iceDensity) *
-                         smoothstepJS(0.35, 0.65, compactness) *
-                         smoothstepJS(2.0, 8.0, diameterMm);
+  const compactDenseIce = smoothstepJS(0.72, 0.90, iceDensity) *
+                          smoothstepJS(0.35, 0.65, compactness) *
+                          smoothstepJS(2.0, 8.0, diameterMm);
+  const densityDominantIce = smoothstepJS(0.84, 0.96, iceDensity) *
+                             smoothstepJS(4.0, 10.0, diameterMm);
+  const denseIceFactor = Math.max(compactDenseIce, densityDominantIce);
   const iceCoeff = mixJS(LIGHT_ICE_REFLECTIVITY_COEFF, DENSE_ICE_REFLECTIVITY_COEFF, denseIceFactor);
   const iceMoment = iceCoeff * Math.pow(Math.max(iceRadarSize, 1e-4), 6.0);
 

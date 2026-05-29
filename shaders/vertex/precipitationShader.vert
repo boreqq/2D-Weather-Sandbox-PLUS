@@ -285,9 +285,11 @@ void main()
                               smoothstep(0.35, 0.75, newDensity) *
                               smoothstep(3.0, 6.0, max(newSize, 0.0));
 
-        hailAccretion = cloudExcess * surfaceArea * 0.0025 * updraftFactor * hailTempFactor * hailCandidate;
-        hailAccretion = min(hailAccretion, totalMass * 0.025);
-        hailAccretion = min(hailAccretion, cloudExcess * 0.035);
+        float richCloudBoost = smoothstep(1.0, 4.0, cloudExcess);
+        float collectionBoost = mix(1.0, 2.2, richCloudBoost);
+        hailAccretion = cloudExcess * surfaceArea * 0.0025 * collectionBoost * updraftFactor * hailTempFactor * hailCandidate;
+        hailAccretion = min(hailAccretion, totalMass * mix(0.025, 0.045, richCloudBoost));
+        hailAccretion = min(hailAccretion, cloudExcess * mix(0.035, 0.060, richCloudBoost));
         float densityRimingRate = clamp(hailRiming * 0.004 + hailAccretion / max(totalMass, 1e-6) * 0.35, 0.0, 0.018);
         newDensity = mix(newDensity, 0.92, densityRimingRate);
         growth += hailAccretion;
