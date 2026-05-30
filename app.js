@@ -1022,6 +1022,9 @@ const FREE_LIQUID_MOMENT_COEFF = 1.0;
 const LIGHT_ICE_REFLECTIVITY_COEFF = 0.14;
 const DENSE_ICE_REFLECTIVITY_COEFF = 0.00005;
 
+const EXPOSURE_MIN = 0.5;
+const EXPOSURE_MAX = 5.0;
+
 const guiControls_default = {
   vorticity : 0.005,
   dragMultiplier : 0.001, // 0.01
@@ -1056,6 +1059,9 @@ const guiControls_default = {
   SmoothCam : true,
   camSpeed : 0.01,
   exposure : 1.0,
+  autoExposure : false,
+  autoExposureMin : EXPOSURE_MIN,
+  autoExposureMax : EXPOSURE_MAX,
   timeOfDay : 9.9,
   latitude : 45.0,
   month : 6.65, // Northern hemisphere summer solstice
@@ -5363,6 +5369,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   var radarDisplayModeController;
   var radarRefreshSecController;
   var radarSweepDurationController;
+  var autoExposureMinController;
+  var autoExposureMaxController;
 
   function setDatGuiControllerVisible(controller, visible)
   {
@@ -5379,6 +5387,49 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     const sweepMode = guiControls && guiControls.radarRefreshMode == RADAR_REFRESH_MODE_SWEEP;
     setDatGuiControllerVisible(radarRefreshSecController, !sweepMode);
     setDatGuiControllerVisible(radarSweepDurationController, sweepMode);
+  }
+
+  function updateAutoExposureDatGuiControls()
+  {
+    const visible = guiControls && guiControls.autoExposure;
+    setDatGuiControllerVisible(autoExposureMinController, visible);
+    setDatGuiControllerVisible(autoExposureMaxController, visible);
+  }
+
+  function normalizeAutoExposureSettings(changedLimit)
+  {
+    guiControls.autoExposure = !!guiControls.autoExposure;
+
+    guiControls.exposure = Number(guiControls.exposure);
+    if (!Number.isFinite(guiControls.exposure))
+      guiControls.exposure = guiControls_default.exposure;
+
+    guiControls.autoExposureMin = Number(guiControls.autoExposureMin);
+    if (!Number.isFinite(guiControls.autoExposureMin))
+      guiControls.autoExposureMin = guiControls_default.autoExposureMin;
+
+    guiControls.autoExposureMax = Number(guiControls.autoExposureMax);
+    if (!Number.isFinite(guiControls.autoExposureMax))
+      guiControls.autoExposureMax = guiControls_default.autoExposureMax;
+
+    guiControls.exposure = clampNumber(guiControls.exposure, EXPOSURE_MIN, EXPOSURE_MAX);
+    guiControls.autoExposureMin = clampNumber(guiControls.autoExposureMin, EXPOSURE_MIN, EXPOSURE_MAX);
+    guiControls.autoExposureMax = clampNumber(guiControls.autoExposureMax, EXPOSURE_MIN, EXPOSURE_MAX);
+
+    if (guiControls.autoExposureMin > guiControls.autoExposureMax) {
+      if (changedLimit == 'min') {
+        guiControls.autoExposureMax = guiControls.autoExposureMin;
+      } else if (changedLimit == 'max') {
+        guiControls.autoExposureMin = guiControls.autoExposureMax;
+      } else {
+        const oldMin = guiControls.autoExposureMin;
+        guiControls.autoExposureMin = guiControls.autoExposureMax;
+        guiControls.autoExposureMax = oldMin;
+      }
+    }
+
+    if (guiControls.autoExposure)
+      guiControls.exposure = clampNumber(guiControls.exposure, guiControls.autoExposureMin, guiControls.autoExposureMax);
   }
 
   function syncLegacyRadarProductField()
@@ -5431,6 +5482,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     }
 
     normalizeRadarGuiState();
+    normalizeAutoExposureSettings();
 
     cam.wrapHorizontally = guiControls.wrapHorizontally;
     cam.smooth = guiControls.SmoothCam;
@@ -5782,12 +5834,32 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         }
       })
       .listen();
-    display_folder.add(guiControls, 'exposure', 0.5, 5.0, 0.01)
+    display_folder.add(guiControls, 'exposure', EXPOSURE_MIN, EXPOSURE_MAX, 0.01)
       .onChange(function() {
         gl.useProgram(postProcessingProgram);
         gl.uniform1f(gl.getUniformLocation(postProcessingProgram, 'exposure'), guiControls.exposure);
       })
-      .name('Exposure');
+      .name('Exposure')
+      .listen();
+
+    display_folder.add(guiControls, 'autoExposure')
+      .onChange(function() {
+        normalizeAutoExposureSettings();
+        updateAutoExposureDatGuiControls();
+      })
+      .name('Auto Exposure')
+      .listen();
+
+    autoExposureMinController = display_folder.add(guiControls, 'autoExposureMin', EXPOSURE_MIN, EXPOSURE_MAX, 0.01)
+      .onChange(function() { normalizeAutoExposureSettings('min'); })
+      .name('Auto Exposure Min')
+      .listen();
+
+    autoExposureMaxController = display_folder.add(guiControls, 'autoExposureMax', EXPOSURE_MIN, EXPOSURE_MAX, 0.01)
+      .onChange(function() { normalizeAutoExposureSettings('max'); })
+      .name('Auto Exposure Max')
+      .listen();
+    updateAutoExposureDatGuiControls();
 
     display_folder.add(guiControls, 'camSpeed', 0.001, 0.050, 0.001).name('Camera Pan Speed');
 
@@ -9975,6 +10047,66 @@ var soundingGraph = {
     weatherStations[i].measure();
   }
 
+  const AUTO_EXPOSURE_SAMPLE_WIDTH = 64;
+  const AUTO_EXPOSURE_SAMPLE_HEIGHT = 36;
+  const AUTO_EXPOSURE_SAMPLE_INTERVAL_FRAMES = 8;
+  const AUTO_EXPOSURE_TARGET_LUMA = 0.42;
+  const AUTO_EXPOSURE_ADAPTATION = 0.25;
+  let autoExposureLastSampleFrame = -AUTO_EXPOSURE_SAMPLE_INTERVAL_FRAMES;
+  let autoExposureSamplePixels = new Uint8Array(AUTO_EXPOSURE_SAMPLE_WIDTH * AUTO_EXPOSURE_SAMPLE_HEIGHT * 4);
+
+  function updateAutoExposureFromCanvas(displayModeEffective, cursorType)
+  {
+    if (!guiControls.autoExposure || SETUP_MODE || displayModeEffective != 'DISP_REAL')
+      return;
+
+    if (cursorType != 0 && !sunIsUp)
+      return;
+
+    if (frameNum - autoExposureLastSampleFrame < AUTO_EXPOSURE_SAMPLE_INTERVAL_FRAMES)
+      return;
+
+    const sampleWidth = Math.min(AUTO_EXPOSURE_SAMPLE_WIDTH, canvas.width);
+    const sampleHeight = Math.min(AUTO_EXPOSURE_SAMPLE_HEIGHT, canvas.height);
+    if (sampleWidth <= 0 || sampleHeight <= 0)
+      return;
+
+    autoExposureLastSampleFrame = frameNum;
+    normalizeAutoExposureSettings();
+
+    const sampleX = Math.floor((canvas.width - sampleWidth) * 0.5);
+    const sampleY = Math.floor((canvas.height - sampleHeight) * 0.5);
+    const samplePixelCount = sampleWidth * sampleHeight;
+    const sampleByteCount = samplePixelCount * 4;
+
+    if (autoExposureSamplePixels.length < sampleByteCount)
+      autoExposureSamplePixels = new Uint8Array(sampleByteCount);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.readBuffer(gl.BACK);
+    gl.readPixels(sampleX, sampleY, sampleWidth, sampleHeight, gl.RGBA, gl.UNSIGNED_BYTE, autoExposureSamplePixels);
+
+    let lumaSum = 0.0;
+    for (let i = 0; i < sampleByteCount; i += 4) {
+      const r = autoExposureSamplePixels[i] / 255.0;
+      const g = autoExposureSamplePixels[i + 1] / 255.0;
+      const b = autoExposureSamplePixels[i + 2] / 255.0;
+      lumaSum += r * 0.2126 + g * 0.7152 + b * 0.0722;
+    }
+
+    const avgLuma = lumaSum / samplePixelCount;
+    if (!Number.isFinite(avgLuma))
+      return;
+
+    const correction = clampNumber(AUTO_EXPOSURE_TARGET_LUMA / Math.max(avgLuma, 0.02), 0.72, 1.35);
+    const desiredExposure = clampNumber(guiControls.exposure * correction, guiControls.autoExposureMin, guiControls.autoExposureMax);
+    guiControls.exposure += (desiredExposure - guiControls.exposure) * AUTO_EXPOSURE_ADAPTATION;
+    guiControls.exposure = clampNumber(guiControls.exposure, guiControls.autoExposureMin, guiControls.autoExposureMax);
+
+    gl.useProgram(postProcessingProgram);
+    gl.uniform1f(gl.getUniformLocation(postProcessingProgram, 'exposure'), guiControls.exposure);
+  }
+
   setInterval(calcFps, 1000); // log fps
   requestAnimationFrame(draw);
 
@@ -10721,6 +10853,7 @@ var soundingGraph = {
 
       gl.drawBuffers([ gl.BACK ]);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4); // draw to canvas
+      updateAutoExposureFromCanvas(displayModeEffective, cursorType);
 
       gl.bindVertexArray(fluidVao);
 
