@@ -6,6 +6,7 @@ in float compactness_out;
 layout(location = 0) out vec4 phaseOut0; // R liquid sum, G ice sum, B compactness sum, A hail shaft sum
 layout(location = 1) out vec4 phaseOut1; // R rho_i sum, G rho_i^2 sum, B compactness sum, A irregularity sum
 layout(location = 2) out vec4 radarOut;  // R Zh, G Zv, B HV, A count
+layout(location = 3) out vec4 sizeStatsOut; // R size sum, G size^2 sum
 
 const float LIQUID_RADAR_SIZE_SCALE = 0.58;
 const float ICE_RADAR_SIZE_SCALE_MIN = 0.42;
@@ -156,4 +157,6 @@ void main()
   phaseOut0 = vec4(liquid, ice, compactness, hailShaft);
   phaseOut1 = vec4(particleRho, particleRho * particleRho, compactness, irregularity);
   radarOut = vec4(zh, zv, hv, 1.0);
+  float sizeStatsWeight = sqrt(max(zh + zv, 0.0));
+  sizeStatsOut = vec4(diameterMm * sizeStatsWeight, diameterMm * diameterMm * sizeStatsWeight, sizeStatsWeight, 0.0);
 }

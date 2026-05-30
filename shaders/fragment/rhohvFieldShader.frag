@@ -10,6 +10,7 @@ uniform vec2 resolution;
 uniform vec2 texelSize;
 uniform sampler2D radarMomentsTex;
 uniform sampler2D phaseStatsTex;
+uniform sampler2D sizeStatsTex;
 uniform isampler2D wallTex;
 uniform float binSize;
 uniform float dryLapse;
@@ -39,6 +40,9 @@ void main()
   float rhoParticleSum = 0.0;
   float rhoParticleSqSum = 0.0;
   float irregularitySum = 0.0;
+  float sizeSum = 0.0;
+  float sizeSqSum = 0.0;
+  float sizeWeightSum = 0.0;
 
   for (int oy = 0; oy < MAX_BIN_SIZE; oy++) {
     if (oy >= bin)
@@ -57,6 +61,7 @@ void main()
 
       vec4 moments = texelFetch(radarMomentsTex, cell, 0);
       vec4 stats = texelFetch(phaseStatsTex, cell, 0);
+      vec4 sizeStats = texelFetch(sizeStatsTex, cell, 0);
       sumZh += max(moments.r, 0.0);
       sumZv += max(moments.g, 0.0);
       sumHV += max(moments.b, 0.0);
@@ -64,6 +69,9 @@ void main()
       rhoParticleSum += max(stats.r, 0.0);
       rhoParticleSqSum += max(stats.g, 0.0);
       irregularitySum += max(stats.a, 0.0);
+      sizeSum += max(sizeStats.r, 0.0);
+      sizeSqSum += max(sizeStats.g, 0.0);
+      sizeWeightSum += max(sizeStats.b, 0.0);
     }
   }
 
@@ -81,8 +89,15 @@ void main()
   float rhoParticleVar = max(rhoParticleSqSum / safeCount - rhoParticleMean * rhoParticleMean, 0.0);
   float rhoParticleStd = sqrt(rhoParticleVar);
   float irregularityMean = irregularitySum / safeCount;
+  float safeSizeWeight = max(sizeWeightSum, 1e-6);
+  float sizeMean = sizeSum / safeSizeWeight;
+  float sizeVar = max(sizeSqSum / safeSizeWeight - sizeMean * sizeMean, 0.0);
+  float sizeStd = sqrt(sizeVar);
+  float sizeCv = sizeStd / max(sizeMean, 0.5);
+  float sizeStatsConfidence = smoothstep(1e-4, 1e-2, sizeWeightSum);
+  float sizeDiversityPenalty = smoothstep(0.45, 1.40, sizeCv) * 0.06 * sizeStatsConfidence;
 
-  float rhoCore = clamp(rhoPrecip - rhoParticleStd * 0.10 - irregularityMean * 0.03, 0.0, 1.0);
+  float rhoCore = clamp(rhoPrecip - rhoParticleStd * 0.10 - irregularityMean * 0.03 - sizeDiversityPenalty, 0.0, 1.0);
 
   float signalConfidence = smoothstep(2e-6, 3e-4, signal);
   float countConfidence = smoothstep(1.5, 4.5, count);

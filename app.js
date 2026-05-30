@@ -1089,6 +1089,7 @@ const guiControls_default = {
   debugRhohv : false,
   rhohvPixelSize : 8,
   rhohvLowCCArtifacts : true,
+  rhohvRandomNoise : true,
   rhohvClutterDensity : 1.0,
   zdrBackground : true,
   debugZdr : false,
@@ -5928,6 +5929,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     var rhohv_folder = datGui.addFolder('Correlation Coefficient');
     rhohv_folder.add(guiControls, 'rhohvLowCCArtifacts').onChange(handleRadarUiExternalChange).name('Low CC Artifacts').listen();
+    rhohv_folder.add(guiControls, 'rhohvRandomNoise').onChange(handleRadarUiExternalChange).name('RhoHV Random Noise').listen();
     rhohv_folder.add(guiControls, 'rhohvClutterDensity', 0.0, 3.0, 0.01).onChange(handleRadarUiExternalChange).name('Clutter Density').listen();
     rhohv_folder.add(guiControls, 'rhohvBackground').onChange(handleRadarUiExternalChange).name('rhohv Background').listen();
     rhohv_folder.add(guiControls, 'debugRhohv').onChange(handleRadarUiExternalChange).name('Debug rhohv at Cursor').listen();
@@ -7178,6 +7180,13 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       'Keep the current noisy low-correlation styling.',
       guiControls.rhohvLowCCArtifacts,
       function(checked) { guiControls.rhohvLowCCArtifacts = checked; }
+    );
+    appendRadarToggleControl(
+      radarSettingsContentEl,
+      'Random Noise',
+      'Adds random texture to rhohv bins.',
+      guiControls.rhohvRandomNoise,
+      function(checked) { guiControls.rhohvRandomNoise = checked; }
     );
     appendRadarRangeControl(radarSettingsContentEl, {
       label : 'Clutter Density',
@@ -9027,6 +9036,7 @@ var soundingGraph = {
   const reflectivityPreviousSnapshotTex = gl.createTexture();
   const phaseTexture = gl.createTexture();           // liquid/ice sums and hail shaft mask
   const phaseStatsTexture = gl.createTexture();      // rho_i / irregularity stats for rhohv
+  const sizeStatsTexture = gl.createTexture();       // particle size sums for rhohv
   const radarMomentsTexture = gl.createTexture();    // Zh, Zv, HV, count
   const radarMomentsSnapshotTex = gl.createTexture();
   const rhohvSnapshotTex = gl.createTexture();
@@ -9039,6 +9049,7 @@ var soundingGraph = {
   const hailShaftTexture_1 = gl.createTexture();      // smoothed hail signal for realistic precipitation tint
   const phaseSnapshotTex = gl.createTexture();
   const phaseStatsSnapshotTex = gl.createTexture();
+  const sizeStatsSnapshotTex = gl.createTexture();
   const wallTexture_0 = gl.createTexture();
   const wallTexture_1 = gl.createTexture();
 
@@ -9158,6 +9169,11 @@ var soundingGraph = {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 
+    gl.bindTexture(gl.TEXTURE_2D, sizeStatsTexture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
     gl.bindTexture(gl.TEXTURE_2D, radarMomentsTexture);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
@@ -9218,6 +9234,11 @@ var soundingGraph = {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 
+    gl.bindTexture(gl.TEXTURE_2D, sizeStatsSnapshotTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
 
     lastSaveTime = new Date();
   }
@@ -9258,6 +9279,9 @@ var soundingGraph = {
     gl.readBuffer(gl.COLOR_ATTACHMENT2);
     gl.bindTexture(gl.TEXTURE_2D, radarMomentsSnapshotTex);
     gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, sim_res_x, sim_res_y);
+    gl.readBuffer(gl.COLOR_ATTACHMENT3);
+    gl.bindTexture(gl.TEXTURE_2D, sizeStatsSnapshotTex);
+    gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, sim_res_x, sim_res_y);
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, radarFieldCurrentIndex == 0 ? radarFieldFrameBuff_0 : radarFieldFrameBuff_1);
     gl.readBuffer(gl.COLOR_ATTACHMENT0);
@@ -9276,6 +9300,8 @@ var soundingGraph = {
     gl.bindTexture(gl.TEXTURE_2D, phaseStatsSnapshotTex);
     gl.activeTexture(gl.TEXTURE2);
     gl.bindTexture(gl.TEXTURE_2D, wallTexture_1);
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, sizeStatsSnapshotTex);
     gl.bindVertexArray(fluidVao);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
@@ -9418,7 +9444,8 @@ var soundingGraph = {
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, phaseTexture, 0);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, phaseStatsTexture, 0);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT2, gl.TEXTURE_2D, radarMomentsTexture, 0);
-  gl.drawBuffers([ gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2 ]);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT3, gl.TEXTURE_2D, sizeStatsTexture, 0);
+  gl.drawBuffers([ gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2, gl.COLOR_ATTACHMENT3 ]);
   gl.clearColor(0.0, 0.0, 0.0, 0.0);
   gl.clear(gl.COLOR_BUFFER_BIT);
 
@@ -9790,6 +9817,7 @@ var soundingGraph = {
   gl.uniform2f(gl.getUniformLocation(rhohvFieldProgram, 'texelSize'), texelSizeX, texelSizeY);
   gl.uniform1i(gl.getUniformLocation(rhohvFieldProgram, 'radarMomentsTex'), 0);
   gl.uniform1i(gl.getUniformLocation(rhohvFieldProgram, 'phaseStatsTex'), 1);
+  gl.uniform1i(gl.getUniformLocation(rhohvFieldProgram, 'sizeStatsTex'), 3);
   gl.uniform1i(gl.getUniformLocation(rhohvFieldProgram, 'wallTex'), 2);
   gl.uniform1f(gl.getUniformLocation(rhohvFieldProgram, 'dryLapse'), dryLapse);
 
@@ -9801,6 +9829,7 @@ var soundingGraph = {
   gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'binSize'), Math.max(1.0, Math.round(guiControls.rhohvPixelSize)));
   gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'radarRefreshTick'), radarRefreshNoiseTick);
   gl.uniform1i(gl.getUniformLocation(rhohvDisplayProgram, 'showLowCCArtifacts'), guiControls.rhohvLowCCArtifacts ? 1 : 0);
+  gl.uniform1i(gl.getUniformLocation(rhohvDisplayProgram, 'showRandomNoise'), guiControls.rhohvRandomNoise ? 1 : 0);
   gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'clutterDensity'), guiControls.rhohvClutterDensity);
 
   gl.useProgram(zdrFieldProgram);
@@ -10210,7 +10239,7 @@ var soundingGraph = {
 
             gl.bindFramebuffer(gl.FRAMEBUFFER, phaseFrameBuff);
             gl.viewport(0, 0, sim_res_x, sim_res_y);
-            gl.drawBuffers([ gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2 ]);
+            gl.drawBuffers([ gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2, gl.COLOR_ATTACHMENT3 ]);
             gl.clearColor(0.0, 0.0, 0.0, 0.0);
             gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -10255,7 +10284,7 @@ var soundingGraph = {
 
               // accumulate liquid/ice phase per cell for radar rhohv
               gl.bindFramebuffer(gl.FRAMEBUFFER, phaseFrameBuff);
-              gl.drawBuffers([ gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2 ]);
+              gl.drawBuffers([ gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2, gl.COLOR_ATTACHMENT3 ]);
               gl.enable(gl.BLEND);
               gl.blendFunc(gl.ONE, gl.ONE);
               gl.useProgram(precipPhaseAccumProgram);
@@ -10785,6 +10814,7 @@ var soundingGraph = {
         gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'binSize'), Math.max(1.0, Math.round(guiControls.rhohvPixelSize)));
         gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'radarRefreshTick'), radarRefreshNoiseTick);
         gl.uniform1i(gl.getUniformLocation(rhohvDisplayProgram, 'showLowCCArtifacts'), guiControls.rhohvLowCCArtifacts ? 1 : 0);
+        gl.uniform1i(gl.getUniformLocation(rhohvDisplayProgram, 'showRandomNoise'), guiControls.rhohvRandomNoise ? 1 : 0);
         gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'clutterDensity'), guiControls.rhohvClutterDensity);
         gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'productAlpha'), 0.76);
         gl.uniform1i(gl.getUniformLocation(rhohvDisplayProgram, 'productOpaque'), guiControls.rhohvBackground ? 1 : 0);
@@ -10957,6 +10987,7 @@ var soundingGraph = {
         gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'binSize'), Math.max(1.0, Math.round(guiControls.rhohvPixelSize)));
         gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'radarRefreshTick'), radarRefreshNoiseTick);
         gl.uniform1i(gl.getUniformLocation(rhohvDisplayProgram, 'showLowCCArtifacts'), guiControls.rhohvLowCCArtifacts ? 1 : 0);
+        gl.uniform1i(gl.getUniformLocation(rhohvDisplayProgram, 'showRandomNoise'), guiControls.rhohvRandomNoise ? 1 : 0);
         gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'clutterDensity'), guiControls.rhohvClutterDensity);
         gl.uniform1f(gl.getUniformLocation(rhohvDisplayProgram, 'productAlpha'), 0.76);
         gl.uniform1i(gl.getUniformLocation(rhohvDisplayProgram, 'productOpaque'), 0);
