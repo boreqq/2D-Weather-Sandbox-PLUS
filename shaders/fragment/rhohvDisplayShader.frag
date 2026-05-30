@@ -15,6 +15,7 @@ uniform bool productOpaque;
 uniform float binSize;
 uniform float radarRefreshTick;
 uniform bool showLowCCArtifacts;
+uniform bool showRandomNoise;
 uniform float clutterDensity;
 uniform vec2 radarPaletteRange;
 uniform float radarPaletteRowCenter;
@@ -116,7 +117,7 @@ void main()
     }
   }
 
-  if (edgeInside > 0.0) {
+  if (edgeInside > 0.0 && showRandomNoise) {
     float rimCluster = rhohvRand2(floor(binCoord * 0.75) + vec2(5.2, 18.6) + vec2(timeBucket * 0.11, timeBucket * 0.09));
     float rimSpeckle = rhohvRand2(binCoord + vec2(27.4, 63.8) + vec2(timeBucket * 0.69, timeBucket * 0.49));
     float rimCoverage = mix(0.16, 0.34, rimCluster);
@@ -124,9 +125,11 @@ void main()
       rho = min(rho + mix(0.010, 0.024, rimCluster), 1.03);
   }
 
-  float dynamicNoise = (rhohvRand2(binCoord + vec2(11.7, 29.4) + vec2(timeBucket * 0.93, timeBucket * 0.37)) - 0.5) * 0.010;
-  float dynamicFine = (rhohvRand2(binCoord * 2.0 + vec2(41.2, 83.1) + vec2(timeBucket * 1.17, timeBucket * 0.71)) - 0.5) * 0.004;
-  rho = clamp(rho + dynamicNoise + dynamicFine, 0.0, 1.05);
+  if (showRandomNoise) {
+    float dynamicNoise = (rhohvRand2(binCoord + vec2(11.7, 29.4) + vec2(timeBucket * 0.93, timeBucket * 0.37)) - 0.5) * 0.010;
+    float dynamicFine = (rhohvRand2(binCoord * 2.0 + vec2(41.2, 83.1) + vec2(timeBucket * 1.17, timeBucket * 0.71)) - 0.5) * 0.004;
+    rho = clamp(rho + dynamicNoise + dynamicFine, 0.0, 1.05);
+  }
 
   vec4 paletteSample = sampleRadarPalette(rho);
   fragmentColor = vec4(paletteSample.rgb, alpha * paletteSample.a);
