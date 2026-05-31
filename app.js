@@ -1052,7 +1052,7 @@ const guiControls_default = {
   growthRate0C : 0.0001,    // 0.0005
   growthRate_30C : 0.001,   // 0.01
   freezingRate : 0.01,
-  meltingRate : 0.01,
+  meltingRate : 0.005,
   evapRate : 0.0008, // 0.0005
   displayMode : 'DISP_REAL',
   wrapHorizontally : true,

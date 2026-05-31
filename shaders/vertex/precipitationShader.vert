@@ -311,7 +311,16 @@ void main()
       } else {                                                                                                    // above freezing
         newMass[WATER] += growth;                                                                                 // water growth
 
-        melting = min((realTemp - CtoK(0.0)) * meltingRate * surfaceArea /* / newDensity */, newMass[ICE]); // 0.0002 snow / hail melting
+        float preMeltTotalMass = max(newMass[WATER] + newMass[ICE], 1e-6);
+        float preMeltLiquidFraction = newMass[WATER] / preMeltTotalMass;
+        float preMeltIceFraction = newMass[ICE] / preMeltTotalMass;
+        float hailMeltCore = smoothstep(0.78, 1.00, newDensity) *
+                             smoothstep(0.50, 0.88, newCompactness) *
+                             smoothstep(8.0, 24.0, max(newSize, 0.0)) *
+                             smoothstep(0.45, 0.95, preMeltIceFraction);
+        float wetShellVentilation = smoothstep(0.08, 0.45, preMeltLiquidFraction);
+        float hailMeltingFactor = mix(1.0, mix(0.34, 0.48, wetShellVentilation), hailMeltCore);
+        melting = min((realTemp - CtoK(0.0)) * meltingRate * surfaceArea * hailMeltingFactor /* / newDensity */, newMass[ICE]); // 0.0002 snow / hail melting
         newMass[ICE] -= melting;
         newMass[WATER] += melting;
         feedback[HEAT] -= melting * meltingHeat;
@@ -406,12 +415,45 @@ void main()
       newPos += base.xy / resolution * 2.;
       float fallMass = max(newMass[WATER] + newMass[ICE], 1e-6);
       float fallSurfaceArea = max(pow(fallMass, 1.0 / 3.0), 1e-6);
+      float fallLiquidFraction = newMass[WATER] / fallMass;
+      float fallIceFraction = newMass[ICE] / fallMass;
+      float fallDiameter = max(newSize, 0.0);
+      float fallCompactness = clamp(newCompactness, 0.0, 1.0);
+      float fallDensity = clamp(newDensity, 0.0, 1.0);
+      float denseEquivalentDiameter = pow(fallMass / max(fallDensity, 0.18), 1.0 / 3.0);
+      float compactShape = smoothstep(0.30, 0.90, fallCompactness);
+      float wetSurface = smoothstep(0.08, 0.65, fallLiquidFraction);
+      float aerodynamicDiameter = mix(max(fallDiameter, 0.50), denseEquivalentDiameter, compactShape * smoothstep(0.42, 0.95, fallDensity));
+      float massAreaFall = sqrt(fallMass / max(aerodynamicDiameter * aerodynamicDiameter, 0.25));
+      float porousSnowDrag = fallIceFraction * (1.0 - wetSurface) *
+                             (1.0 - smoothstep(0.42, 0.82, fallDensity)) *
+                             (1.0 - smoothstep(0.22, 0.68, fallCompactness));
+      float irregularIceDrag = fallIceFraction * (1.0 - wetSurface) *
+                               smoothstep(0.28, 0.70, fallCompactness) *
+                               (1.0 - smoothstep(0.72, 0.98, fallDensity));
+      float dragShape = clamp(1.0 + porousSnowDrag * 1.45 + irregularIceDrag * 0.35 - compactShape * 0.18 - wetSurface * 0.10, 0.65, 2.60);
+      float densityFall = mix(0.52, 1.28, smoothstep(0.18, 1.0, fallDensity));
+      float sizeFall = mix(0.75, 1.38, smoothstep(0.8, 32.0, fallDiameter));
+      float dryHailFall = smoothstep(0.82, 1.00, fallDensity) *
+                          smoothstep(0.58, 0.90, fallCompactness) *
+                          smoothstep(5.0, 16.0, fallDiameter) *
+                          smoothstep(0.70, 0.98, fallIceFraction) *
+                          (1.0 - smoothstep(0.04, 0.18, fallLiquidFraction));
+      float wetHailFall = smoothstep(0.72, 1.00, fallDensity) *
+                          smoothstep(0.48, 0.88, fallCompactness) *
+                          smoothstep(4.0, 14.0, fallDiameter) *
+                          smoothstep(0.45, 0.95, fallIceFraction) *
+                          smoothstep(0.05, 0.45, fallLiquidFraction);
+      float meltingHailFall = smoothstep(3.0, 12.0, fallDiameter) *
+                              smoothstep(0.20, 0.90, fallIceFraction) *
+                              smoothstep(0.08, 0.70, fallLiquidFraction) *
+                              smoothstep(0.42, 0.82, fallCompactness);
       float legacyFallSpeed = fallSpeed * newDensity * sqrt(fallMass / fallSurfaceArea);
-      float terminalDensityFall = mix(0.45, 1.25, clamp(newDensity, 0.0, 1.0));
-      float terminalSizeFall = mix(0.65, 2.20, smoothstep(1.0, 25.0, max(newSize, 0.0)));
-      float hailDrag = mix(1.0, 0.72, smoothstep(5.0, 25.0, max(newSize, 0.0)) * smoothstep(0.65, 1.0, newCompactness));
-      float terminalFallSpeed = fallSpeed * terminalDensityFall * terminalSizeFall * hailDrag;
-      float terminalBlend = smoothstep(5.0, 15.0, max(newSize, 0.0)) * smoothstep(0.55, 0.95, newDensity);
+      float hailDrag = mix(1.0, 0.84, dryHailFall * smoothstep(10.0, 35.0, fallDiameter));
+      float hailFallBoost = 1.0 + dryHailFall * 0.28 + wetHailFall * 0.42 + meltingHailFall * 0.36;
+      float terminalFallSpeed = fallSpeed * massAreaFall * densityFall * sizeFall * hailDrag * hailFallBoost / dragShape;
+      float terminalBlend = smoothstep(2.0, 12.0, fallDiameter) * smoothstep(0.35, 0.92, fallDensity);
+      terminalBlend = max(terminalBlend, smoothstep(3.0, 10.0, fallDiameter) * max(wetHailFall * 0.72, meltingHailFall * 0.58));
       newPos.y -= mix(legacyFallSpeed, terminalFallSpeed, terminalBlend); // fall speed relative to air
       /*
        // falling at fixed speed:
