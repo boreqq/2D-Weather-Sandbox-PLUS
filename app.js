@@ -351,6 +351,9 @@ const legacyValsPerDroplet = 5;
 const RADAR_PRODUCT_REFLECTIVITY = 'RADAR_REFLECTIVITY';
 const RADAR_PRODUCT_RHOHV = 'RADAR_RHOHV';
 const RADAR_PRODUCT_ZDR = 'RADAR_ZDR';
+const RADAR_PRODUCT_VIL = 'RADAR_VIL';
+const RADAR_PRODUCT_EHT = 'RADAR_EHT';
+const RADAR_PRODUCT_VILD = 'RADAR_VILD';
 const RADAR_PRODUCT_KDP = 'RADAR_KDP';
 const RADAR_PRODUCT_RADIAL_VELOCITY = 'RADAR_RADIAL_VELOCITY';
 const RADAR_PANEL_MODE_COMPOSITE = 'RADAR_PANEL_MODE_COMPOSITE';
@@ -394,11 +397,19 @@ const RADAR_PARAM_LIMITS = Object.freeze({
 const RADAR_PRODUCTS = Object.freeze([
   {
     id : RADAR_PRODUCT_REFLECTIVITY,
-    label : 'reflectivity',
-    launcherLabel : 'ref',
-    shortDescription : 'Base reflectivity (dBZ)',
+    label : 'dbzh',
+    launcherLabel : 'dbzh',
+    shortDescription : 'Horizontal reflectivity (dBZ)',
     isImplemented : true,
     displayMode : 'DISP_REFLECTIVITY',
+  },
+  {
+    id : RADAR_PRODUCT_RADIAL_VELOCITY,
+    label : 'vradh',
+    launcherLabel : 'vradh',
+    shortDescription : 'Radial velocity',
+    isImplemented : false,
+    displayMode : null,
   },
   {
     id : RADAR_PRODUCT_RHOHV,
@@ -425,12 +436,28 @@ const RADAR_PRODUCTS = Object.freeze([
     displayMode : null,
   },
   {
-    id : RADAR_PRODUCT_RADIAL_VELOCITY,
-    label : 'vradh',
-    launcherLabel : 'vradh',
-    shortDescription : 'Radial velocity',
-    isImplemented : false,
-    displayMode : null,
+    id : RADAR_PRODUCT_VIL,
+    label : 'vil',
+    launcherLabel : 'vil',
+    shortDescription : 'Vertically integrated liquid',
+    isImplemented : true,
+    displayMode : 'DISP_VIL',
+  },
+  {
+    id : RADAR_PRODUCT_VILD,
+    label : 'vild',
+    launcherLabel : 'vild',
+    shortDescription : 'Vertically integrated liquid density',
+    isImplemented : true,
+    displayMode : 'DISP_VILD',
+  },
+  {
+    id : RADAR_PRODUCT_EHT,
+    label : 'eht',
+    launcherLabel : 'eht',
+    shortDescription : 'Echo top height',
+    isImplemented : true,
+    displayMode : 'DISP_EHT',
   },
 ]);
 
@@ -454,9 +481,12 @@ const RADAR_PRODUCT_TEXTURE_ROW_BY_ID = Object.freeze(
   }, {})
 );
 const RADAR_PRODUCT_PAL_CODES_BY_ID = Object.freeze({
-  [RADAR_PRODUCT_REFLECTIVITY] : [ 'BR', 'DB', 'DR' ],
+  [RADAR_PRODUCT_REFLECTIVITY] : [ 'BR', 'DB', 'DR', 'DBZH' ],
   [RADAR_PRODUCT_RHOHV] : [ 'CC', 'RHOHV', 'RHO' ],
   [RADAR_PRODUCT_ZDR] : [ 'ZDR' ],
+  [RADAR_PRODUCT_VIL] : [ 'VIL' ],
+  [RADAR_PRODUCT_EHT] : [ 'EHT', 'ET', 'TOPS' ],
+  [RADAR_PRODUCT_VILD] : [ 'VILD' ],
   [RADAR_PRODUCT_KDP] : [ 'KDP', 'PHI' ],
   [RADAR_PRODUCT_RADIAL_VELOCITY] : [ 'BV', 'DV', 'SRV', 'VEL', 'VR' ],
 });
@@ -580,6 +610,48 @@ const DEFAULT_RADAR_PALETTE_DEFINITIONS = Object.freeze({
       createRadarPaletteEntry(3.0, [ 70, 210, 45, 255 ], 'smooth', [ 255, 244, 0, 255 ]),
       createRadarPaletteEntry(4.0, [ 255, 244, 0, 255 ], 'smooth', [ 255, 0, 0, 255 ]),
       createRadarPaletteEntry(7.0, [ 255, 0, 0, 255 ], 'solid'),
+    ],
+  }),
+  [RADAR_PRODUCT_VIL] : Object.freeze({
+    id : getBuiltinRadarPaletteId(RADAR_PRODUCT_VIL),
+    name : 'Default',
+    range : [ 0.0, 80.0 ],
+    entries : [
+      createRadarPaletteEntry(0.0, [ 0, 0, 0, 0 ], 'smooth'),
+      createRadarPaletteEntry(5.0, [ 35, 80, 125, 255 ], 'smooth'),
+      createRadarPaletteEntry(15.0, [ 0, 180, 215, 255 ], 'smooth'),
+      createRadarPaletteEntry(30.0, [ 45, 215, 80, 255 ], 'smooth'),
+      createRadarPaletteEntry(45.0, [ 245, 235, 30, 255 ], 'smooth'),
+      createRadarPaletteEntry(60.0, [ 245, 125, 25, 255 ], 'smooth'),
+      createRadarPaletteEntry(80.0, [ 200, 35, 120, 255 ], 'solid'),
+    ],
+  }),
+  [RADAR_PRODUCT_EHT] : Object.freeze({
+    id : getBuiltinRadarPaletteId(RADAR_PRODUCT_EHT),
+    name : 'Default',
+    range : [ 0.0, 16.0 ],
+    entries : [
+      createRadarPaletteEntry(0.0, [ 0, 0, 0, 0 ], 'smooth'),
+      createRadarPaletteEntry(1.0, [ 39, 72, 120, 255 ], 'smooth'),
+      createRadarPaletteEntry(3.0, [ 30, 170, 210, 255 ], 'smooth'),
+      createRadarPaletteEntry(6.0, [ 45, 205, 75, 255 ], 'smooth'),
+      createRadarPaletteEntry(9.0, [ 245, 235, 35, 255 ], 'smooth'),
+      createRadarPaletteEntry(12.0, [ 245, 125, 25, 255 ], 'smooth'),
+      createRadarPaletteEntry(16.0, [ 210, 35, 80, 255 ], 'solid'),
+    ],
+  }),
+  [RADAR_PRODUCT_VILD] : Object.freeze({
+    id : getBuiltinRadarPaletteId(RADAR_PRODUCT_VILD),
+    name : 'Default',
+    range : [ 0.0, 8.0 ],
+    entries : [
+      createRadarPaletteEntry(0.0, [ 0, 0, 0, 0 ], 'smooth'),
+      createRadarPaletteEntry(0.5, [ 30, 70, 110, 255 ], 'smooth'),
+      createRadarPaletteEntry(1.0, [ 0, 170, 210, 255 ], 'smooth'),
+      createRadarPaletteEntry(2.0, [ 40, 210, 70, 255 ], 'smooth'),
+      createRadarPaletteEntry(3.5, [ 245, 230, 25, 255 ], 'smooth'),
+      createRadarPaletteEntry(5.0, [ 245, 115, 25, 255 ], 'smooth'),
+      createRadarPaletteEntry(8.0, [ 200, 35, 120, 255 ], 'solid'),
     ],
   }),
 });
@@ -1145,6 +1217,12 @@ function getRadarProductIdForDisplayMode(displayMode)
     return RADAR_PRODUCT_RHOHV;
   if (displayMode == 'DISP_ZDR')
     return RADAR_PRODUCT_ZDR;
+  if (displayMode == 'DISP_VIL')
+    return RADAR_PRODUCT_VIL;
+  if (displayMode == 'DISP_VILD')
+    return RADAR_PRODUCT_VILD;
+  if (displayMode == 'DISP_EHT')
+    return RADAR_PRODUCT_EHT;
   return null;
 }
 
@@ -5828,9 +5906,12 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         'Curl' : 'DISP_CURL',
         'Relative Humidity / Cloud Density' : 'DISP_HUMD',
         'Air Quality' : 'DISP_AIRQUALITY',
-        'Reflectivity (beta)' : 'DISP_REFLECTIVITY',
+        'DBZH' : 'DISP_REFLECTIVITY',
         'Correlation Coefficient (rhohv)' : 'DISP_RHOHV',
-        'Differential Reflectivity (ZDR)' : 'DISP_ZDR'
+        'Differential Reflectivity (ZDR)' : 'DISP_ZDR',
+        'VIL' : 'DISP_VIL',
+        'VILD' : 'DISP_VILD',
+        'Echo Top Height (EHT)' : 'DISP_EHT'
       })
       .name('Display Mode')
       .onChange(function() {
@@ -5995,11 +6076,11 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       .name('Radar attenuation')
       .listen();
 
-    var reflectivity_folder = datGui.addFolder('Reflectivity');
-    reflectivity_folder.add(guiControls, 'reflectivityBackground').onChange(handleRadarUiExternalChange).name('Reflectivity Background').listen();
+    var reflectivity_folder = datGui.addFolder('DBZH');
+    reflectivity_folder.add(guiControls, 'reflectivityBackground').onChange(handleRadarUiExternalChange).name('DBZH Background').listen();
     reflectivity_folder.add(guiControls, 'debugReflectivity').onChange(handleRadarUiExternalChange).name('Debug dBZ at Cursor').listen();
     reflectivity_folder.add(guiControls, 'reflectivityPixelSize', 1, 32, 1)
-      .name('Reflectivity Pixel Size')
+      .name('DBZH Pixel Size')
       .onChange(function() {
         lastReflectivitySnapshotTime = -Infinity;
         handleRadarUiExternalChange();
@@ -6120,6 +6201,26 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     return -1;
   }
 
+  function getEchoColumnRadarProductMode(displayMode)
+  {
+    if (displayMode == 'DISP_VIL')
+      return 2;
+    if (displayMode == 'DISP_VILD')
+      return 3;
+    if (displayMode == 'DISP_EHT')
+      return 4;
+    return -1;
+  }
+
+  function getEchoColumnRadarProductPalette(displayMode)
+  {
+    if (displayMode == 'DISP_VIL')
+      return RADAR_PRODUCT_VIL;
+    if (displayMode == 'DISP_VILD')
+      return RADAR_PRODUCT_VILD;
+    return RADAR_PRODUCT_EHT;
+  }
+
   function getEnabledRadarTowers()
   {
     return radarTowers.filter((tower) => tower.isEnabled());
@@ -6138,6 +6239,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   function shouldUsePolarRadarRenderer(displayMode)
   {
     if (!getRadarProductIdForDisplayMode(displayMode))
+      return false;
+    if (getRadarProductRenderMode(displayMode) < 0)
       return false;
     return getPolarRadarRenderTowers().length > 0;
   }
@@ -7160,6 +7263,42 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       return;
     }
 
+    if (product.id == RADAR_PRODUCT_VIL || product.id == RADAR_PRODUCT_VILD || product.id == RADAR_PRODUCT_EHT) {
+      appendRadarToggleControl(
+        radarSettingsContentEl,
+        'Background',
+        'Blend over terrain or render as a full radar view.',
+        guiControls.reflectivityBackground,
+        function(checked) { guiControls.reflectivityBackground = checked; }
+      );
+      appendRadarRangeControl(radarSettingsContentEl, {
+        label : 'Pixel Size',
+        description : 'Controls the blocky radar bin look.',
+        min : 1,
+        max : 32,
+        step : 1,
+        getValue : function() { return guiControls.reflectivityPixelSize; },
+        formatValue : function(value) { return Math.round(value).toString(); },
+        onInput : function(value) {
+          guiControls.reflectivityPixelSize = Math.round(value);
+          lastReflectivitySnapshotTime = -Infinity;
+        },
+      });
+      if (guiControls.radarRefreshMode != RADAR_REFRESH_MODE_SWEEP) {
+        appendRadarRangeControl(radarSettingsContentEl, {
+          label : 'Radar Refresh (s)',
+          description : 'Shared refresh cadence for radar snapshots.',
+          min : 0,
+          max : 10,
+          step : 0.01,
+          getValue : function() { return guiControls.reflectivityRefreshSec; },
+          formatValue : function(value) { return formatRadarUiNumber(value, 2); },
+          onInput : function(value) { guiControls.reflectivityRefreshSec = value; },
+        });
+      }
+      return;
+    }
+
     if (product.id == RADAR_PRODUCT_ZDR) {
       appendRadarToggleControl(
         radarSettingsContentEl,
@@ -7333,7 +7472,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
             <button id="radarSettingsToggle" class="radar-settings-sheet__tab" type="button" aria-expanded="false" aria-controls="radarSettingsBody">
               <div class="radar-settings-sheet__copy">
                 <div class="radar-settings-sheet__eyebrow">Settings</div>
-                <div id="radarSettingsPeekTitle" class="radar-settings-sheet__title">Reflectivity</div>
+                <div id="radarSettingsPeekTitle" class="radar-settings-sheet__title">DBZH</div>
               </div>
               <span id="radarSettingsArrow" class="radar-settings-sheet__arrow" aria-hidden="true">▴</span>
             </button>
@@ -8710,6 +8849,7 @@ var soundingGraph = {
   const rhohvDisplayShader = await loadShader('rhohvDisplayShader.frag');
   const zdrFieldShader = await loadShader('zdrFieldShader.frag');
   const zdrDisplayShader = await loadShader('zdrDisplayShader.frag');
+  const echoColumnProductsShader = await loadShader('echoColumnProductsShader.frag');
   const universalDisplayShader = await loadShader('universalDisplayShader.frag');
   const radarPolarDisplayShader = await loadShader('radarPolarDisplayShader.frag');
   const skyBackgroundDisplayShader = await loadShader('skyBackgroundDisplayShader.frag');
@@ -8745,6 +8885,7 @@ var soundingGraph = {
   const rhohvDisplayProgram = createProgram(dispVertexShader, rhohvDisplayShader);
   const zdrFieldProgram = createProgram(simVertexShader, zdrFieldShader);
   const zdrDisplayProgram = createProgram(dispVertexShader, zdrDisplayShader);
+  const echoColumnProductsProgram = createProgram(simVertexShader, echoColumnProductsShader);
   const universalDisplayProgram = createProgram(dispVertexShader, universalDisplayShader);
   const radarPolarDisplayProgram = createProgram(dispVertexShader, radarPolarDisplayShader);
   skyBackgroundDisplayProgram = createProgram(realDispVertexShader, skyBackgroundDisplayShader);
@@ -9218,6 +9359,7 @@ var soundingGraph = {
   const rhohvPreviousSnapshotTex = gl.createTexture();
   const zdrSnapshotTex = gl.createTexture();
   const zdrPreviousSnapshotTex = gl.createTexture();
+  const echoColumnProductsSnapshotTex = gl.createTexture();
   const radarFieldTexture_0 = gl.createTexture();    // smoothed radar field
   const radarFieldTexture_1 = gl.createTexture();    // smoothed radar field
   const hailShaftTexture_0 = gl.createTexture();      // smoothed hail signal for realistic precipitation tint
@@ -9262,6 +9404,7 @@ var soundingGraph = {
   reflectivitySnapshotFBO = gl.createFramebuffer();
   const rhohvSnapshotFBO = gl.createFramebuffer();
   const zdrSnapshotFBO = gl.createFramebuffer();
+  const echoColumnProductsSnapshotFBO = gl.createFramebuffer();
   const phaseFrameBuff = gl.createFramebuffer();
   const phaseSnapshotFBO = gl.createFramebuffer();
   const radarFieldFrameBuff_0 = gl.createFramebuffer();
@@ -9380,6 +9523,11 @@ var soundingGraph = {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 
+    gl.bindTexture(gl.TEXTURE_2D, echoColumnProductsSnapshotTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
     gl.bindTexture(gl.TEXTURE_2D, radarFieldTexture_0);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
@@ -9464,6 +9612,20 @@ var soundingGraph = {
     gl.bindTexture(gl.TEXTURE_2D, reflectivitySnapshotTex);
     gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, sim_res_x, sim_res_y);
 
+    gl.bindFramebuffer(gl.FRAMEBUFFER, echoColumnProductsSnapshotFBO);
+    gl.viewport(0, 0, sim_res_x, sim_res_y);
+    gl.drawBuffers([ gl.COLOR_ATTACHMENT0 ]);
+    gl.disable(gl.BLEND);
+    gl.useProgram(echoColumnProductsProgram);
+    gl.uniform1f(gl.getUniformLocation(echoColumnProductsProgram, 'reflMult'), guiControls.reflectivityGain);
+    gl.uniform1f(gl.getUniformLocation(echoColumnProductsProgram, 'reflBoost'), guiControls.reflectivityBoost);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, reflectivitySnapshotTex);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, wallTexture_1);
+    gl.bindVertexArray(fluidVao);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
     gl.bindFramebuffer(gl.FRAMEBUFFER, rhohvSnapshotFBO);
     gl.viewport(0, 0, sim_res_x, sim_res_y);
     gl.drawBuffers([ gl.COLOR_ATTACHMENT0 ]);
@@ -9514,6 +9676,8 @@ var soundingGraph = {
       gl.bindTexture(gl.TEXTURE_2D, rhohvSnapshotTex);
     } else if (displayMode == 'DISP_ZDR') {
       gl.bindTexture(gl.TEXTURE_2D, zdrSnapshotTex);
+    } else if (getEchoColumnRadarProductMode(displayMode) >= 0) {
+      gl.bindTexture(gl.TEXTURE_2D, echoColumnProductsSnapshotTex);
     } else {
       gl.bindTexture(gl.TEXTURE_2D, reflectivitySnapshotTex);
     }
@@ -9615,6 +9779,9 @@ var soundingGraph = {
 
   gl.bindFramebuffer(gl.FRAMEBUFFER, zdrSnapshotFBO);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, zdrSnapshotTex, 0);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, echoColumnProductsSnapshotFBO);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, echoColumnProductsSnapshotTex, 0);
 
   gl.bindFramebuffer(gl.FRAMEBUFFER, phaseFrameBuff);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, phaseTexture, 0);
@@ -10040,6 +10207,12 @@ var soundingGraph = {
   gl.uniform1i(gl.getUniformLocation(radarFieldUpdateProgram, 'radarFieldTex'), 2);
   gl.uniform1i(gl.getUniformLocation(radarFieldUpdateProgram, 'radarSourceTex'), 3);
 
+  gl.useProgram(echoColumnProductsProgram);
+  gl.uniform2f(gl.getUniformLocation(echoColumnProductsProgram, 'resolution'), sim_res_x, sim_res_y);
+  gl.uniform1i(gl.getUniformLocation(echoColumnProductsProgram, 'reflectivityTex'), 0);
+  gl.uniform1i(gl.getUniformLocation(echoColumnProductsProgram, 'wallTex'), 1);
+  gl.uniform1f(gl.getUniformLocation(echoColumnProductsProgram, 'simHeightKm'), guiControls.simHeight / 1000.0);
+
   gl.useProgram(skyBackgroundDisplayProgram);
   gl.uniform2f(gl.getUniformLocation(skyBackgroundDisplayProgram, 'resolution'), sim_res_x, sim_res_y);
   gl.uniform2f(gl.getUniformLocation(skyBackgroundDisplayProgram, 'texelSize'), texelSizeX, texelSizeY);
@@ -10061,6 +10234,7 @@ var soundingGraph = {
   gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'phaseStatsTex'), 6);
   gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'radarMomentsTex'), 7);
   gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'radarPaletteTex'), RADAR_PALETTE_TEXTURE_UNIT);
+  gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'simHeightKm'), guiControls.simHeight / 1000.0);
 
   gl.useProgram(radarPolarDisplayProgram);
   gl.uniform2f(gl.getUniformLocation(radarPolarDisplayProgram, 'resolution'), sim_res_x, sim_res_y);
@@ -10719,6 +10893,10 @@ var soundingGraph = {
         gl.bindFramebuffer(gl.FRAMEBUFFER, reflectivitySnapshotFBO);
         gl.readBuffer(gl.COLOR_ATTACHMENT0); // reflectivitySnapshotTex
         gl.readPixels(simXposDbg, simYposDbg, 1, 1, gl.RGBA, gl.FLOAT, radarDbg);
+      } else if (getEchoColumnRadarProductMode(guiControls.displayMode) >= 0) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, echoColumnProductsSnapshotFBO);
+        gl.readBuffer(gl.COLOR_ATTACHMENT0);
+        gl.readPixels(simXposDbg, simYposDbg, 1, 1, gl.RGBA, gl.FLOAT, radarDbg);
       } else {
         gl.bindFramebuffer(gl.FRAMEBUFFER, guiControls.displayMode == 'DISP_RHOHV' ? rhohvSnapshotFBO : zdrSnapshotFBO);
         gl.readBuffer(gl.COLOR_ATTACHMENT0);
@@ -10733,6 +10911,13 @@ var soundingGraph = {
         var z_raw_dbg = Math.sqrt(zhDbg) * guiControls.reflectivityGain + zhDbg * guiControls.reflectivityBoost;
         var dBZ_dbg = 10.0 * Math.log10(z_raw_dbg + 1e-6);
         reflectivityDbgEl.textContent = 'dBZ*: ' + dBZ_dbg.toFixed(1);
+      } else if (getEchoColumnRadarProductMode(guiControls.displayMode) >= 0) {
+        if (guiControls.displayMode == 'DISP_VIL')
+          reflectivityDbgEl.textContent = 'VIL: ' + radarDbg[1].toFixed(1);
+        else if (guiControls.displayMode == 'DISP_VILD')
+          reflectivityDbgEl.textContent = 'VILD: ' + radarDbg[2].toFixed(2);
+        else
+          reflectivityDbgEl.textContent = 'EHT: ' + radarDbg[0].toFixed(1) + ' km';
       } else if (guiControls.displayMode == 'DISP_RHOHV') {
         reflectivityDbgEl.textContent = 'rhohv: ' + radarDbg[0].toFixed(3);
       } else {
@@ -11178,6 +11363,29 @@ var soundingGraph = {
           gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
         }
         break;
+        case 'DISP_VIL':
+        case 'DISP_VILD':
+        case 'DISP_EHT':
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindTexture(gl.TEXTURE_2D, waterTexture_1);
+          gl.activeTexture(gl.TEXTURE4);
+          gl.bindTexture(gl.TEXTURE_2D, echoColumnProductsSnapshotTex);
+          gl.activeTexture(gl.TEXTURE2);
+          gl.bindTexture(gl.TEXTURE_2D, wallTexture_1);
+          gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'quantityIndex'), 2);
+          gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'dispMultiplier'), 1.0);
+          gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'reflectivityMode'), 1);
+          gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'radarProduct'), getEchoColumnRadarProductMode(displayModeEffective));
+          applyRadarPaletteUniforms(universalDisplayProgram, getEchoColumnRadarProductPalette(displayModeEffective));
+          gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflMult'), guiControls.reflectivityGain);
+          gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflBoost'), guiControls.reflectivityBoost);
+          gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflPixelSize'), guiControls.reflectivityPixelSize);
+          gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'reflBackground'), guiControls.reflectivityBackground ? 1 : 0);
+          if (!guiControls.reflectivityBackground) {
+            gl.enable(gl.BLEND);
+            gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+          }
+          break;
         case 'DISP_PRECIPFEEDBACK_MASS':
           gl.activeTexture(gl.TEXTURE0);
           gl.bindTexture(gl.TEXTURE_2D, precipitationFeedbackTexture);
@@ -11259,6 +11467,28 @@ var soundingGraph = {
         gl.bindTexture(gl.TEXTURE_2D, phaseStatsSnapshotTex);
         gl.activeTexture(gl.TEXTURE7);
         gl.bindTexture(gl.TEXTURE_2D, radarMomentsTexture);
+        gl.activeTexture(gl.TEXTURE2);
+        gl.bindTexture(gl.TEXTURE_2D, wallTexture_1);
+      } else if (getEchoColumnRadarProductMode(guiControls.displayMode) >= 0) {
+        gl.useProgram(universalDisplayProgram);
+        gl.uniform2f(gl.getUniformLocation(universalDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
+        gl.uniform3f(gl.getUniformLocation(universalDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
+        gl.uniform4f(gl.getUniformLocation(universalDisplayProgram, 'cursor'), mouseXinSim, mouseYinSim, guiControls.brushSize * 0.5, cursorType);
+        gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'Xmult'), horizontalDisplayMult);
+        gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'reflectivityMode'), 1);
+        gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflMult'), guiControls.reflectivityGain);
+        gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflBoost'), guiControls.reflectivityBoost);
+        gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflPixelSize'), guiControls.reflectivityPixelSize);
+        gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'reflBackground'), 0);
+        gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'radarProduct'), getEchoColumnRadarProductMode(guiControls.displayMode));
+        gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'quantityIndex'), 2);
+        gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'dispMultiplier'), 1.0);
+        applyRadarPaletteUniforms(universalDisplayProgram, getEchoColumnRadarProductPalette(guiControls.displayMode));
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, waterTexture_1);
+        gl.activeTexture(gl.TEXTURE4);
+        gl.bindTexture(gl.TEXTURE_2D, echoColumnProductsSnapshotTex);
         gl.activeTexture(gl.TEXTURE2);
         gl.bindTexture(gl.TEXTURE_2D, wallTexture_1);
       } else if (guiControls.displayMode == 'DISP_RHOHV') {

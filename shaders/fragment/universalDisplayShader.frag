@@ -24,9 +24,10 @@ uniform float reflMult;
 uniform float reflBoost;
 uniform float reflPixelSize; // >=1; 1 = no pixelation
 uniform bool reflBackground; // true = opaque overwrite, false = overlay (alpha honored)
-uniform int radarProduct; // 0 reflectivity, 1 rhohv
+uniform int radarProduct; // 0 DBZH, 1 rhohv, 2 VIL, 3 VILD, 4 EHT
 uniform vec2 radarPaletteRange;
 uniform float radarPaletteRowCenter;
+uniform float simHeightKm;
 
 uniform vec3 view;   // Xpos  Ypos    Zoom
 uniform vec4 cursor; // xpos   Ypos  Size   type
@@ -75,6 +76,21 @@ void main()
       break;
     }
   } else if (reflectivityMode) {
+    if (radarProduct == 2 || radarProduct == 3 || radarProduct == 4) {
+      float echoTopKm = max(cell.r, 0.0);
+      float productValue = radarProduct == 2 ? max(cell.g, 0.0) : (radarProduct == 3 ? max(cell.b, 0.0) : echoTopKm);
+      float valid = clamp(cell.a, 0.0, 1.0);
+      float altitudeKm = texCoord.y * simHeightKm;
+      if (valid <= 0.0 || wall[1] == 0 || altitudeKm > echoTopKm)
+        discard;
+
+      float alpha = reflBackground ? 1.0 : 0.68 * valid;
+      vec4 paletteSample = sampleRadarPalette(productValue);
+      fragmentColor = vec4(paletteSample.rgb, alpha * paletteSample.a);
+      drawCursor(cursor, view);
+      return;
+    }
+
     // bulk pseudo-reflectivity or rhohv using cached radar moments
     float zhLinear = max(cell.r, 0.0);
     float p = sqrt(zhLinear);
