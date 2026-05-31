@@ -1069,7 +1069,7 @@ const guiControls_default = {
   dayNightCycle : true,
   accelerateNight : true,
   greenhouseGases : 0.001,
-  waterGreenHouseEffect : 0.0015,
+  waterGreenHouseEffect : 0.0023,
   IR_rate : 1.0,
   tool : 'TOOL_NONE',
   brushSize : 20,
@@ -1565,7 +1565,7 @@ function calcDropletRadarMetrics(waterMass, iceMass, density, size, compactness 
   const hydro = computeHydrometeorMemberships(liquid, ice, density, size, compactness);
   const diameterMm = Math.max(size, 0.0);
 
-  const rainFlatten = Math.min(Math.max((diameterMm - 1.0) * 0.085, 0.0), 0.38);
+  const rainFlatten = Math.min(Math.max((diameterMm - 0.6) * 0.140, 0.0), 0.68);
   const mixedFlatten = Math.min(Math.max((diameterMm - 2.0) * 0.035, 0.0), 0.16);
   const snowFlatten = Math.min(Math.max((diameterMm - 3.0) * 0.008, 0.0), 0.05);
   const flattening = rainFlatten * hydro.rain +
@@ -1593,15 +1593,15 @@ function calcDropletRadarMetrics(waterMass, iceMass, density, size, compactness 
 
   const brightBand = hydro.melting * 0.08 + hydro.wetHail * 0.05;
 
-  const largeRainTail = smoothstepJS(3.0, 5.5, diameterMm);
-  const giantRainTail = smoothstepJS(5.0, 7.5, diameterMm);
+  const largeRainTail = smoothstepJS(2.1, 4.0, diameterMm);
+  const giantRainTail = smoothstepJS(3.4, 5.8, diameterMm);
   const meltingTail = smoothstepJS(3.0, 6.0, diameterMm);
-  const rainZdr = mixJS(0.12, 2.45, smoothstepJS(0.8, 4.5, diameterMm)) + flattening * 1.10 + largeRainTail * 0.78 + giantRainTail * 3.00;
+  const rainZdr = mixJS(0.20, 3.55, smoothstepJS(0.45, 3.2, diameterMm)) + flattening * 1.45 + largeRainTail * 1.55 + giantRainTail * 3.10;
   const meltingZdr = mixJS(0.22, 1.55, smoothstepJS(1.0, 6.0, diameterMm)) + flattening * 0.82 + meltingTail * 0.22;
-  const wetHailZdr = mixJS(-0.10, 0.70, smoothstepJS(5.0, 25.0, diameterMm)) + flattening * 0.35;
-  const snowZdr = mixJS(0.02, 0.22, smoothstepJS(1.0, 10.0, diameterMm));
-  const graupelZdr = mixJS(-0.10, 0.08, smoothstepJS(1.5, 8.0, diameterMm));
-  const hailZdr = -mixJS(0.05, 0.70, smoothstepJS(5.0, 30.0, diameterMm));
+  const wetHailZdr = mixJS(-0.10, 0.45, smoothstepJS(5.0, 25.0, diameterMm)) + flattening * 0.25;
+  const snowZdr = mixJS(-0.08, 0.32, smoothstepJS(1.0, 12.0, diameterMm)) - smoothstepJS(0.65, 0.95, density) * 0.10;
+  const graupelZdr = mixJS(-0.18, 0.12, smoothstepJS(1.5, 10.0, diameterMm)) - smoothstepJS(0.60, 0.95, compactness) * 0.05;
+  const hailZdr = -mixJS(0.02, 0.35, smoothstepJS(5.0, 35.0, diameterMm));
 
   let targetZdrDb = hydro.rain * rainZdr +
                     hydro.snow * snowZdr +
@@ -1609,7 +1609,7 @@ function calcDropletRadarMetrics(waterMass, iceMass, density, size, compactness 
                     hydro.hail * hailZdr +
                     hydro.wetHail * wetHailZdr +
                     hydro.melting * meltingZdr;
-  targetZdrDb = Math.min(Math.max(targetZdrDb, -1.25), 6.80);
+  targetZdrDb = Math.min(Math.max(targetZdrDb, -1.25), 7.00);
 
   const baseMoment = radarPresence * (waterMoment + iceMoment) * (1.0 + brightBand * 0.85);
   const zdrRatio = Math.pow(10.0, targetZdrDb / 10.0);
@@ -5826,6 +5826,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         'Snow Deposition' : 'DISP_PRECIPFEEDBACK_SNOW',
         'Precipitation/Soil Moisture' : 'DISP_SOIL_MOISTURE',
         'Curl' : 'DISP_CURL',
+        'Relative Humidity / Cloud Density' : 'DISP_HUMD',
         'Air Quality' : 'DISP_AIRQUALITY',
         'Reflectivity (beta)' : 'DISP_REFLECTIVITY',
         'Correlation Coefficient (rhohv)' : 'DISP_RHOHV',
@@ -8518,6 +8519,8 @@ var soundingGraph = {
       });
     } else if (event.code == 'KeyK') {
       guiControls.displayMode = 'DISP_AIRQUALITY';
+    } else if (event.code == 'KeyC') {
+      guiControls.displayMode = 'DISP_HUMD';
     } else if (event.key == 'ArrowLeft') {
       leftPressed = true; // <
     } else if (event.key == 'ArrowUp') {
@@ -8700,6 +8703,7 @@ var soundingGraph = {
 
   const temperatureDisplayShader = await loadShader('temperatureDisplayShader.frag');
   const airQualityDisplayShader = await loadShader('airQualityDisplayShader.frag');
+  const humidityDisplayShader = await loadShader('humidityDisplayShader.frag');
   const precipDisplayShader = await loadShader('precipDisplayShader.frag');
   const precipPhaseAccumShader = await loadShader('precipPhaseAccum.frag');
   const rhohvFieldShader = await loadShader('rhohvFieldShader.frag');
@@ -8734,6 +8738,7 @@ var soundingGraph = {
 
   const temperatureDisplayProgram = createProgram(dispVertexShader, temperatureDisplayShader);
   const airQualityDisplayProgram = createProgram(dispVertexShader, airQualityDisplayShader);
+  const humidityDisplayProgram = createProgram(dispVertexShader, humidityDisplayShader);
   const precipDisplayProgram = createProgram(precipDisplayVertexShader, precipDisplayShader);
   const precipPhaseAccumProgram = createProgram(precipPhaseAccumVertexShader, precipPhaseAccumShader);
   const rhohvFieldProgram = createProgram(simVertexShader, rhohvFieldShader);
@@ -9773,7 +9778,7 @@ var soundingGraph = {
   // gl.generateMipmap(gl.TEXTURE_2D);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);        // horizontal
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); // horizontal
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); // vertical
 
 
@@ -9972,6 +9977,15 @@ var soundingGraph = {
   gl.uniform1i(gl.getUniformLocation(airQualityDisplayProgram, 'wallTex'), 2);
   gl.uniform1i(gl.getUniformLocation(airQualityDisplayProgram, 'colorScalesTex'), 9);
   gl.uniform1f(gl.getUniformLocation(airQualityDisplayProgram, 'dryLapse'), dryLapse);
+
+  gl.useProgram(humidityDisplayProgram);
+  gl.uniform2f(gl.getUniformLocation(humidityDisplayProgram, 'resolution'), sim_res_x, sim_res_y);
+  gl.uniform2f(gl.getUniformLocation(humidityDisplayProgram, 'texelSize'), texelSizeX, texelSizeY);
+  gl.uniform1i(gl.getUniformLocation(humidityDisplayProgram, 'baseTex'), 0);
+  gl.uniform1i(gl.getUniformLocation(humidityDisplayProgram, 'waterTex'), 1);
+  gl.uniform1i(gl.getUniformLocation(humidityDisplayProgram, 'wallTex'), 2);
+  gl.uniform1i(gl.getUniformLocation(humidityDisplayProgram, 'colorScalesTex'), 9);
+  gl.uniform1f(gl.getUniformLocation(humidityDisplayProgram, 'dryLapse'), dryLapse);
 
   gl.useProgram(precipDisplayProgram);
   gl.uniform2f(gl.getUniformLocation(precipDisplayProgram, 'resolution'), sim_res_x, sim_res_y);
@@ -10355,7 +10369,7 @@ var soundingGraph = {
 
       if (!guiControls.paused) { // Simulation part
 
-        let nightAccelerationActive = !airplaneMode && guiControls.dayNightCycle && guiControls.accelerateNight && guiControls.sunAngle < 0.;
+        let nightAccelerationActive = !airplaneMode && guiControls.dayNightCycle && guiControls.accelerateNight && (guiControls.sunAngle < 0. || guiControls.sunAngle > 180.);
 
         if (guiControls.dayNightCycle) {
           if (airplaneMode) {
@@ -10996,6 +11010,12 @@ var soundingGraph = {
 
 
     } else {
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, baseTexture_1);
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, waterTexture_1);
+      gl.activeTexture(gl.TEXTURE2);
+      gl.bindTexture(gl.TEXTURE_2D, wallTexture_1);
       gl.activeTexture(gl.TEXTURE9);
       gl.bindTexture(gl.TEXTURE_2D, colorScalesTexture);
       gl.activeTexture(gl.TEXTURE0 + RADAR_PALETTE_TEXTURE_UNIT);
@@ -11038,6 +11058,13 @@ var soundingGraph = {
         gl.uniform3f(gl.getUniformLocation(airQualityDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
         gl.uniform4f(gl.getUniformLocation(airQualityDisplayProgram, 'cursor'), mouseXinSim, mouseYinSim, guiControls.brushSize * 0.5, cursorType);
         gl.uniform1f(gl.getUniformLocation(airQualityDisplayProgram, 'Xmult'), horizontalDisplayMult);
+
+      } else if (displayModeEffective == 'DISP_HUMD') {
+        gl.useProgram(humidityDisplayProgram);
+        gl.uniform2f(gl.getUniformLocation(humidityDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
+        gl.uniform3f(gl.getUniformLocation(humidityDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
+        gl.uniform4f(gl.getUniformLocation(humidityDisplayProgram, 'cursor'), mouseXinSim, mouseYinSim, guiControls.brushSize * 0.5, cursorType);
+        gl.uniform1f(gl.getUniformLocation(humidityDisplayProgram, 'Xmult'), horizontalDisplayMult);
 
       } else if (displayModeEffective == 'DISP_IRDOWNTEMP') {
         gl.useProgram(IRtempDisplayProgram);

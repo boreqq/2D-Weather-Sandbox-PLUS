@@ -59,8 +59,8 @@ void main()
     // fragmentColor = vec4(tempColorPalette[palletteIndex], 1.0);
 
 
-    int palletteIndex = int(map_range(realTempC, -37.5, 32.5, 0., 70.));
-    palletteIndex = clamp(palletteIndex, 0, 70);
+    int palletteIndex = int(map_range(realTempC, -71.0, 59.0, 0., 130.));
+    palletteIndex = clamp(palletteIndex, 0, 130);
     fragmentColor = texelFetch(colorScalesTex, ivec2(0, palletteIndex), 0);
 
     drawVectorField(base.xy, displayVectorField);
