@@ -9350,7 +9350,7 @@ var soundingGraph = {
   const waterTexture_1 = gl.createTexture();
   const reflectivitySnapshotTex = gl.createTexture();
   const reflectivityPreviousSnapshotTex = gl.createTexture();
-  const phaseTexture = gl.createTexture();           // liquid/ice sums and hail shaft mask
+  const phaseTexture = gl.createTexture();           // liquid/ice sums and hail shaft tint signal
   const phaseStatsTexture = gl.createTexture();      // rho_i / irregularity stats for rhohv
   const sizeStatsTexture = gl.createTexture();       // particle size sums for rhohv
   const radarMomentsTexture = gl.createTexture();    // Zh, Zv, HV, count
@@ -10206,6 +10206,7 @@ var soundingGraph = {
   gl.uniform1i(gl.getUniformLocation(radarFieldUpdateProgram, 'wallTex'), 1);
   gl.uniform1i(gl.getUniformLocation(radarFieldUpdateProgram, 'radarFieldTex'), 2);
   gl.uniform1i(gl.getUniformLocation(radarFieldUpdateProgram, 'radarSourceTex'), 3);
+  gl.uniform1i(gl.getUniformLocation(radarFieldUpdateProgram, 'fieldUpdateMode'), 0);
 
   gl.useProgram(echoColumnProductsProgram);
   gl.uniform2f(gl.getUniformLocation(echoColumnProductsProgram, 'resolution'), sim_res_x, sim_res_y);
@@ -10753,6 +10754,7 @@ var soundingGraph = {
             }
 
             gl.useProgram(radarFieldUpdateProgram);
+            gl.uniform1i(gl.getUniformLocation(radarFieldUpdateProgram, 'fieldUpdateMode'), 0);
             gl.activeTexture(gl.TEXTURE0);
             gl.bindTexture(gl.TEXTURE_2D, baseTexture_1);
             gl.activeTexture(gl.TEXTURE1);
@@ -10767,6 +10769,7 @@ var soundingGraph = {
             gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
             radarFieldCurrentIndex = 1 - radarFieldCurrentIndex;
 
+            gl.uniform1i(gl.getUniformLocation(radarFieldUpdateProgram, 'fieldUpdateMode'), 1);
             gl.activeTexture(gl.TEXTURE2);
             gl.bindTexture(gl.TEXTURE_2D, hailShaftCurrentIndex == 0 ? hailShaftTexture_0 : hailShaftTexture_1);
             gl.activeTexture(gl.TEXTURE3);

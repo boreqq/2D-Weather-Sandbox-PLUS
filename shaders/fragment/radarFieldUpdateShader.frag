@@ -18,6 +18,7 @@ uniform sampler2D radarSourceTex;
 
 uniform vec2 resolution;
 uniform vec2 texelSize;
+uniform int fieldUpdateMode;
 
 layout(location = 0) out vec4 radarFieldOut;
 
@@ -66,6 +67,13 @@ void main()
 
   vec4 previousField = blurField();
   vec4 blurredSource = blurSource();
+
+  if (fieldUpdateMode == 1) {
+    float previousHail = previousField.a;
+    float sourceHail = blurredSource.a;
+    radarFieldOut = vec4(0.0, 0.0, 0.0, max(previousHail * 0.972 + sourceHail * 0.110, 0.0));
+    return;
+  }
 
   // The particles already move through the domain, so the radar field should
   // only keep a short memory and mild local smoothing instead of being advected

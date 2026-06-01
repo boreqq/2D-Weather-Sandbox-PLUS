@@ -3,7 +3,7 @@ precision highp float;
 
 in vec4 data_out; // liquid, ice, density, diameter mm
 in float compactness_out;
-layout(location = 0) out vec4 phaseOut0; // R liquid sum, G ice sum, B compactness sum, A hail shaft sum
+layout(location = 0) out vec4 phaseOut0; // R liquid sum, G ice sum, B compactness sum, A hail shaft tint signal
 layout(location = 1) out vec4 phaseOut1; // R rho_i sum, G rho_i^2 sum, B compactness sum, A irregularity sum
 layout(location = 2) out vec4 radarOut;  // R Zh, G Zv, B HV, A count
 layout(location = 3) out vec4 sizeStatsOut; // R size sum, G size^2 sum
@@ -150,9 +150,14 @@ void main()
 
   float hv = particleRho * sqrt(max(zh * zv, 0.0));
   float irregularity = graupelness * 0.45 + hailness * 0.70 + wetHailness * 1.00 + meltingness * 0.85;
-  float hailShaft = (hailness + wetHailness * 0.80) * total *
-                    smoothstep(5.0, 15.0, diameterMm) *
-                    smoothstep(0.76, 1.00, density);
+  float hailClass = clamp(hailness + wetHailness, 0.0, 1.0);
+  float hailSizeSignal = smoothstep(2.0, 28.0, diameterMm);
+  float largeHailSignal = smoothstep(10.0, 42.0, diameterMm);
+  float hailMassSignal = smoothstep(0.02, 0.55, total);
+  float hailDensitySignal = mix(0.62, 1.0, smoothstep(0.65, 1.0, density));
+  float hailShaft = hailClass * hailMassSignal * hailDensitySignal *
+                    mix(0.32, 1.55, hailSizeSignal) *
+                    (1.0 + largeHailSignal * 0.75);
 
   phaseOut0 = vec4(liquid, ice, compactness, hailShaft);
   phaseOut1 = vec4(particleRho, particleRho * particleRho, compactness, irregularity);
