@@ -1,5 +1,7 @@
 # 2D Weather Sandbox PLUS
+
 #### What it is?
+
 This projects aims to produce a semirealistic two-dimensional, realtime, interactive simulation of the weather in earth's troposphere.
 
 Simulating clouds and precipitation are the main objectives of this project. All the equations relating to water phase change are simplified versions of the real ones, to improve performance and ease programming. Precipitation is simulated using discrete particles but can be viualized as both partiles and smooth realistic looking curtains.
@@ -9,6 +11,7 @@ Simulating clouds and precipitation are the main objectives of this project. All
 Features added in this version of 2DWS:
 
 - ### Radars
+
   - The radar system in 2D Weather Sandbox PLUS simulates how real weather radars scan the atmosphere from a fixed tower location. In the simulation, radar beams are sent outward and return information about the particles in the air, such as drops, snow, hail and mixed-phase hydrometeors. The simulated radar tower acts like a real radar station: it collects data on the distance, height and properties of hydrometeors, then translates that information into common radar products.
 
   - The tower displays data from the 2D vertical cross-section (in expection to VIL, VILD and EHT. Those are displayed in entire column from ground to top of simulation)
