@@ -1,113 +1,53 @@
-# 2D Weather Sandbox
-THIS IS FORK OF 2D WEATHER SANDBOX. I DO NOT GUARANTE THAT IT WILL WORK AS INTENDED!
-
-Previously called "Weather_Sim_4"
-
+# 2D Weather Sandbox PLUS
+#### What it is?
 This projects aims to produce a semirealistic two-dimensional, realtime, interactive simulation of the weather in earth's troposphere.
 
+Simulating clouds and precipitation are the main objectives of this project. All the equations relating to water phase change are simplified versions of the real ones, to improve performance and ease programming. Precipitation is simulated using discrete particles but can be viualized as both partiles and smooth realistic looking curtains.
 
-## Clouds and precipitation
-Simulating clouds and precipitation are the main objectives of this project.
-All the equations relating to water phase change are simplified versions of the real ones, to improve performance and ease programming.
-Precipitation is simulated using discrete particles but can be viualized as both partiles and smooth realistic looking curtains.
+# Features
 
-Forming Cell:
-![Screenshot (7)](https://user-images.githubusercontent.com/42830240/232745061-25c860c3-8c52-4704-86af-bcba13f74cd6.png)
+Features added in this version of 2DWS:
 
-Mature Cell 1:
-![Screenshot (23)](https://user-images.githubusercontent.com/42830240/232744315-5207396b-57e4-4aaa-968a-e85cd9283f3d.png)
-Mature Cell 1 with Precipitation Particles:
-![Screenshot (26)](https://user-images.githubusercontent.com/42830240/232744406-ba1c7230-a8b2-492a-85bb-c1c57c1c8a81.png)
+- ### Radars
+  - The radar system in 2D Weather Sandbox PLUS simulates how real weather radars scan the atmosphere from a fixed tower location. In the simulation, radar beams are sent outward and return information about the particles in the air, such as drops, snow, hail and mixed-phase hydrometeors. The simulated radar tower acts like a real radar station: it collects data on the distance, height and properties of hydrometeors, then translates that information into common radar products.
 
+  - The tower displays data from the 2D vertical cross-section (in expection to VIL, VILD and EHT. Those are displayed in entire column from ground to top of simulation)
 
-Mature Cell 2:
-![Screenshot (10)](https://user-images.githubusercontent.com/42830240/232746561-341b867e-9fcd-4d34-b200-61c403695d5a.png)
+  - You can place radar towers by selecting them in tool menu and placing them with left mouse button. By clicking them once again you open menu, where you can change parameters of radar tower, such as: resolution (size of one radar bin), beam width (width resolution), attenuation factor, refresh rate and range of the radar. You can also select 3 types of radars bands: X - high resolution, but high attenuation and short range; C - balance between resolution, range and atenuation; S - offers high range and low influence of attenuation, but very low resolution.
 
+  - You can name radar towers up to 4 characters. You can select individual radar sites in radar menu. You can open it clicking in top left corner. In the menu you can select radar products (in composite mode you can only select reflectivity, POSH, MEHS and EHT). When you dont have any radar or every radar on the map has disabled view in composite, when composite selected, you can select every product (except KDP and Radial velocity), with entire map coverage, and with set refresh rate and resolution.
+  Composite mode (when there is atleast one radar that is active in composite view on the map) shows data from all radars at once. It guarantees that you dont have to switch to every radar, when you want to see data from all the map.
 
-Mature Cell 3 zoomed out:
-![Screenshot (17)](https://user-images.githubusercontent.com/42830240/232746022-dcb4755a-219c-474e-8ae6-8a6ebfadbd0e.png)
+  - Single site radar view shows polar grid map (with beam width and bin size), when composite shows data from all radars in one pixel grid map.
 
+  - Products:
+    - **Reflectivity** - radar product that shows size of particles in air. Its unit is dBZ, and it uses a logarithmic scale. Small precipitation, for example small raindrops from nimbostratus or small ice crystals, gives low dBZ values, usually 15–30 dBZ. Precipitation from a storm cell typically ranges from 30–55 dBZ. Hail mixed with heavy rain often gives 55+ dBZ. 2DWS PLUS simulates reflectivity with size, horizontal, vertical and ice/water attenuation.
 
-Sunlight with realistic colors makes clouds and precipitation look real
-![Screenshot (31)](https://user-images.githubusercontent.com/42830240/232749322-d4602f66-015e-4405-9da7-2e4969473c55.png)
-![Screenshot (32)](https://user-images.githubusercontent.com/42830240/232749511-1e5c2010-e65a-44eb-bbfe-f9e9b87f5c10.png)
+    - **RhoHV (Correlation coefficient)** - radar product that shows correlation between the size and shape of particles in the scanned radar bin. Values near 1.0 indicate that particles are similar, for example ice or light rain. Lower values indicate differences between particles, for example hail and rain mixture, graupel, or non-meteorological particles.
 
+    - **ZDR (Differential reflectivity)** - radar product that shows the difference between reflectivity in horizontal and vertical polarization. Values around 0 dBZ mean that particles have similar height and width, while higher values mean that particles are wider than taller. Big raindrops give high values, while hail and ice crystals usually give values around 0 dBZ or lower.
 
+    - **KDP (Specific differential phase) [W.I.P.]** - polarimetric radar parameter that measures the difference in phase shift between horizontal and vertical radio waves. It provides a direct indicator of rain intensity, especially in heavy precipitation. It is calculated as the gradient of the total differential phase, PhiDP, along the beam, specifically targeting the amount of slowing caused by flattened, water-coated hydrometeors.
 
-![Bui5](https://user-images.githubusercontent.com/42830240/160260713-32ffee8a-18a2-45bc-98be-b4396793b466.PNG)
+    - **Radial Velocity [W.I.P.]** - radar product that shows particles moving toward or away from the radar. It can show, for example, microbursts, downbursts, or rotation inside the cloud. Due to the simulation being in 2D, it cannot simulate mesocyclone rotations, but it can show horizontal vortices inside clouds.
 
+    - **VIL (Vertically Integrated Liquid) [W.I.P.]** - radar-derived product that estimates the total amount of liquid water contained in a vertical column of the atmosphere. Its unit is usually kg/m².
 
-## Limitations
-Due to the two-dimensional nature of the simulation, it cannot simulate 3D vortices such as tornadoes, dust devils or hurricanes. It can only simulate linear storm systems.
+      VIL is useful for detecting areas with strong precipitation cores. Higher VIL values usually indicate heavier rain, strong convective cells, or possible hail-producing regions. Low VIL values are typical for weak stratiform precipitation or shallow clouds.
 
+      In 2DWS PLUS, VIL is visualized as full-height vertical columns in the 2D vertical cross-section. Each horizontal position has one VIL value, and this value is rendered from the top of the simulation area down to the ground. This means VIL does not show the exact vertical position of water inside the cloud, but instead shows the total liquid content of the whole atmospheric column.
 
-# Example: low intensity cell analysis
-Warm moist air is rising into the cloud on the right condensing water and releasing heat until it eventually rises well above the freezing level and forming ice (snow), realeasing even more heat. The snow grows until it descents down under the freezing level and melts into rain, absorbing heat and creating a downdraft. Below the cloud level some of the rain evaporates, absorbing even more heat and strengtening the downward motion. Near the surface the air spreads out sideways and in this case mostly to the right, creating a small low level cold front. This cold front pushes even more warm air up.
-![Schermopname (92)_LI](https://user-images.githubusercontent.com/42830240/173361271-23383858-f0d3-485d-91b9-21e0d3c75211.jpg)
-The dew points and cape are very low in this example, but it's just enough to form a nice stable cell.
-![Naamloos](https://user-images.githubusercontent.com/42830240/173365013-cdea3b40-f470-4390-a8fa-b8d93025d893.png)
+    - **VILD (Vertically Integrated Liquid Density) [W.I.P.]** - radar-derived product based on VIL divided by the height of the radar echo. It estimates how concentrated the liquid water content is inside the vertical storm column. Its unit is usually g/m³.
 
-# The Code
-The simulation is based on a simple fluid simulation topology.
-All code was written by me (Niels Daemen) except for the libraries included
+      VILD is useful for distinguishing between tall clouds with broadly distributed precipitation and more compact, intense precipitation cores. Higher VILD values may indicate dense convective cores, heavy precipitation, or possible hail-producing regions. Compared to VIL alone, VILD can be more useful when comparing storms with different echo top heights.
 
-## Fluid Model
-The fluid model consists of a 2 dimensional grid of cells. 
-Each cell has the following properties:
+      In 2DWS PLUS, VILD is calculated from the simulated VIL value and the height of the detected echo at each horizontal position. Like VIL, it is visualized as full-height vertical columns in the 2D vertical cross-section. This means VILD does not show where the dense precipitation is located vertically, but instead shows the density value assigned to the whole atmospheric column.
 
-<img width="1095" alt="image" src="https://github.com/niels747/2D-Weather-Sandbox/assets/42830240/f08e08e9-4d96-4d80-b890-1f213085668f">
+    - **EHT (Echo Top Height) [W.I.P.]** - radar-derived product that estimates the maximum height at which radar-detectable precipitation particles are present. It shows how high the radar echo extends above the ground.
 
+      Echo Top Height is useful for identifying the vertical development of clouds and storms. Low echo tops usually indicate shallow precipitation or weak cloud growth, while high echo tops are often associated with deep convection, thunderstorms, strong updrafts, and intense storm cells.
 
-These properties are not simply defined at the center of each cell, but using a so called staggered grid. the velocities are defined exactly on the border between cells. They are therefore exactly in between the centers of the cells, which is where the pressures are defined. In this way the velocities define the exact flow rate from one cell to its neighbor. This makes calculating new velocities and pressures very simple.
+      In 2DWS PLUS, EHT is displayed as full-height vertical columns in the 2D vertical cross-section. Each horizontal position has one echo top height value assigned to it, and the whole column from the top of the display to the bottom is colored according to that value. This means EHT does not show the complete shape of the cloud top, but shows the maximum detected radar echo height for each horizontal position.
+  - Attenuation - when radar signal passes through particles in the air, its getting scattered. Because of that, when radar beam tries to scan whats behind high precipitation area, signal has lowered strength, so readings will be lowered that its actually. You can fix this by using S-band radar, or by placing many radar sites and using composite view.
 
-![image](https://github.com/niels747/2D-Weather-Sandbox/assets/42830240/107d58f9-359c-4507-b7a9-bb1019a60934)
-
-
-### Iteration
-One iteration or timestep consists of the following steps:
-1.	Calculating pressure 
-2.	Calculating velocities
-3.	Advection
-Every step is completed for each cell in the grid, before the next step is executed.
-
-
-
-### Calculating pressure
-Pressure can be imagined as being the amount of fluid that is in a cell.
-The velocities can be imagined as a flow of fluid from a cell to a neighbouring cell. Therefore the change in pressure is equal to the net inflow to the cell this is also known as the divergence (or convergence) in the velocity vector field. To calculate the net inflow to the cell, the total outflow is simply subtracted from the total inflow. This is done for both x and y directions. 
-
-<img width="460" alt="image" src="https://github.com/niels747/2D-Weather-Sandbox/assets/42830240/b2500548-5145-451f-b67b-84d2d8673811">
-
-![image](https://github.com/niels747/2D-Weather-Sandbox/assets/42830240/83ea332f-c5c9-46de-8afb-5a0bf28c7b31)
-
-
-
-### Calculating velocities
-
-The change in the velocity trough a point is proportional to the pressure across it. This is basically just Newton's 2nd law (F = m * a) Pressure is force / area, and since the area of the cell is constant, the force (F) is simply the pressure gradient across the point. The mass (M) is also assumed to be constant as if the fluid has a constant density, this is not physically accurate. The acceleration (a) is then simply a function of the pressure gradient. Acceleration is simply the change in velocity / time, and because the timestep is constant all that remains is simply adding the pressure gradients to the velocities for both x and y axis:
-
-
-<img width="566" alt="image" src="https://github.com/niels747/2D-Weather-Sandbox/assets/42830240/3c8714fc-8b32-4fa8-8591-3a07509001a7">
-
-
-
-
-## Libraries
-
-The simulation and visualization itself is entirely custom js and glsl written by me (Niels Daemen). The sounding graph, keyboard and mouse controls are also custom code. The simulation can run and be partly controlled without any libraries. I do however use the following libraries for part of the user interface and file compression:
-
-DatGui: Used for the user interface because it's very easy to add more controllable variables. It is however getting a bit cluttered and other options should be evaluated. Building a custom interface is also an option.
-
-Pako: Only used for data compression to reduce save file sizes. Size reduction can be 2-4 times depending on the state of the simulation. Not essential. Downside is that it takes longer to save and load files.
-  
-# How to run it locally and modify code
-  1. Install VS code: https://code.visualstudio.com/
-  2. Install VS Code extensions:
-   * Live Server (required)
-   * GLSL lint (recommended)
-   * Clang-Format, requires installing CLANG/LLVM: https://github.com/llvm/llvm-project/releases/tag/llvmorg-16.0.0 (recommended)
-  
-  3. Clone project using GIT, or just download ZIP
-  4. Open project folder in VS Code
-  5. Open index.html
-  6. Start live server (Go Live), automatically opens page in browser
+**MORE INFORMATIONS IN README SOON!**
