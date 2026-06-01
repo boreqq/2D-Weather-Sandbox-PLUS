@@ -17,7 +17,7 @@ uniform sampler2D radarMomentsTex; // cached Zh/Zv/sumHV/count from precipitatio
 uniform sampler2D radarPaletteTex;
 uniform isampler2D wallTex;
 
-uniform int quantityIndex; // wich quantity to display
+uniform int quantityIndex; // which quantity to display
 uniform float dispMultiplier;
 uniform bool reflectivityMode;
 uniform float reflMult;
@@ -60,7 +60,7 @@ void main()
 
   float val = cell[quantityIndex] * dispMultiplier;
 
-  if (wall[1] == 0) {  // is wall
+  if (wall[1] == 0 && !reflectivityMode) {  // is wall
     switch (wall[0]) { // wall type
     case 0:
       fragmentColor = vec4(0, 0, 0, 1);

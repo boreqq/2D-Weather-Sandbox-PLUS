@@ -1269,7 +1269,9 @@ var iterNum = 0;
 
 // global framebuffers for measurements
 var frameBuff_0;
+var frameBuff_1;
 var lightFrameBuff_0;
+var reflectivitySnapshotFBO;
 
 var dryLapse;
 
@@ -3119,6 +3121,8 @@ class RadarTower
 
 
 let weatherStations = []; // array holding all weather stations
+let radarTowers = [];    // array holding all radar towers
+let radarNeedsMeasure = false;
 
 
 async function loadData()
@@ -3499,6 +3503,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
 
   await setLoadingBar();
+  ensureSoundingPanel();
 
   let lastSaveTime = new Date();
 
@@ -5682,6 +5687,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         'Snow' : 'TOOL_WALL_SNOW',
         'Wind' : 'TOOL_WIND',
         'Weather Station' : 'TOOL_STATION',
+        'Radar Tower' : 'TOOL_RADAR',
+        'Sounding Probe' : 'TOOL_SOUNDING',
       })
       .name('Tool')
       .listen();
@@ -5959,7 +5966,6 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
     display_folder.add(guiControls, 'SmoothCam').onChange(function() { cam.smooth = guiControls.SmoothCam; }).name('Smooth Camera');
 
-    display_folder.add(guiControls, 'showGraph').onChange(hideOrShowGraph).name('Show Sounding Graph').listen();
     display_folder.add(guiControls, 'showDrops').name('Show Droplets').listen();
     display_folder.add(guiControls, 'realDewPoint').name('Show Real Dew Point');
 
@@ -7741,30 +7747,57 @@ function ensureSoundingPanel()
 var soundingGraph = {
     graphCanvas : null,
     ctx : null,
-    init : function() {
+  init : function() {
+      ensureSoundingPanel();
       this.graphCanvas = document.getElementById('graphCanvas');
-      this.graphCanvas.height = window.innerHeight;
-      this.graphCanvas.width = this.graphCanvas.height;
+      resizeSoundingCanvas();
       this.ctx = this.graphCanvas.getContext('2d');
       var style = this.graphCanvas.style;
-      if (guiControls.showGraph)
+      const panelEl = document.getElementById('soundingPanel');
+      if (guiControls.showGraph) {
         style.display = 'block';
-      else
+        if (panelEl)
+          panelEl.style.display = 'flex';
+      } else {
         style.display = 'none';
+        if (panelEl)
+          panelEl.style.display = 'none';
+      }
     },
     draw : function(simXpos, simYpos) {
       // draw graph
       // mouse positions in sim coordinates
 
       gl.bindFramebuffer(gl.FRAMEBUFFER, frameBuff_1);
-      gl.readBuffer(gl.COLOR_ATTACHMENT0);
+      // Read sounding columns; optionally smooth horizontally (Gaussian weights ±2 cols)
       var baseTextureValues = new Float32Array(4 * sim_res_y);
-      gl.readPixels(simXpos, 0, 1, sim_res_y, gl.RGBA, gl.FLOAT,
-                    baseTextureValues); // read a vertical culumn of cells
+      var waterTextureValues = new Float32Array(4 * sim_res_y);
+      const radius = guiControls.soundingSmoothing ? 2 : 0;
+      const weights = [1, 4, 6, 4, 1];
+      let weightSum = 0;
+
+      gl.readBuffer(gl.COLOR_ATTACHMENT0);
+      for (let dx = -radius; dx <= radius; dx++) {
+        const w = guiControls.soundingSmoothing ? weights[dx + radius] : 1;
+        const col = clamp(simXpos + dx, 0, sim_res_x - 1);
+        var tempBase = new Float32Array(4 * sim_res_y);
+        gl.readPixels(col, 0, 1, sim_res_y, gl.RGBA, gl.FLOAT, tempBase);
+        for (let i = 0; i < tempBase.length; i++) baseTextureValues[i] += tempBase[i] * w;
+        weightSum += w;
+      }
 
       gl.readBuffer(gl.COLOR_ATTACHMENT1);
-      var waterTextureValues = new Float32Array(4 * sim_res_y);
-      gl.readPixels(simXpos, 0, 1, sim_res_y, gl.RGBA, gl.FLOAT, waterTextureValues); // read a vertical culumn of cells
+      for (let dx = -radius; dx <= radius; dx++) {
+        const w = guiControls.soundingSmoothing ? weights[dx + radius] : 1;
+        const col = clamp(simXpos + dx, 0, sim_res_x - 1);
+        var tempWater = new Float32Array(4 * sim_res_y);
+        gl.readPixels(col, 0, 1, sim_res_y, gl.RGBA, gl.FLOAT, tempWater);
+        for (let i = 0; i < tempWater.length; i++) waterTextureValues[i] += tempWater[i] * w;
+      }
+      if (weightSum > 0) {
+        for (let i = 0; i < baseTextureValues.length; i++) baseTextureValues[i] /= weightSum;
+        for (let i = 0; i < waterTextureValues.length; i++) waterTextureValues[i] /= weightSum;
+      }
 
       gl.readBuffer(gl.COLOR_ATTACHMENT2);
       var wallTextureValues = new Int32Array(4 * sim_res_y);
@@ -7780,9 +7813,13 @@ var soundingGraph = {
       c.fillRect(0, 0, graphCanvas.width, graphCanvas.height);
 
       drawIsotherms();
+      drawHeightLabels();
 
       var reachedAir = false;
       var surfaceLevel;
+      var surfaceTempC = null;
+      var surfaceDewC = null;
+      var surfaceRH = null;
 
       // Draw temperature line
       c.beginPath();
@@ -7804,6 +7841,12 @@ var soundingGraph = {
 
             if (simYpos < surfaceLevel)
               simYpos = surfaceLevel;
+
+            // surface diagnostics
+            surfaceTempC = temp;
+            surfaceDewC = KtoC(dewpoint(waterTextureValues[4 * y]));
+            const tempK = baseTextureValues[4 * y + 3] - ((y / sim_res_y) * guiControls.simHeight * guiControls.dryLapseRate) / 1000.0;
+            surfaceRH = relativeHumd(tempK, waterTextureValues[4 * y]);
           }
           if (reachedAir && y == simYpos) {
             // c.fillText('' + Math.round(map_range(y-1, 0, sim_res_y, 0,
@@ -7907,23 +7950,30 @@ var soundingGraph = {
       c.stroke();
 
       // Draw rising parcel temperature line
-      var water = waterTextureValues[4 * simYpos];
-      var potentialTemp = baseTextureValues[4 * simYpos + 3];
-      var initialTemperature = potentialTemp - ((simYpos / sim_res_y) * guiControls.simHeight * guiControls.dryLapseRate) / 1000.0;
-      var initialCloudWater = waterTextureValues[4 * simYpos + 1];
-      // var temp = potentialTemp - ((y / sim_res_y) * guiControls.simHeight *
-      // guiControls.dryLapseRate) / 1000.0 - 273.15;
+      // Force parcel sampling to surface level of this column only (ignore cursor Y)
+      var parcelY = surfaceLevel;
+      var water = waterTextureValues[4 * parcelY];
+      var potentialTemp = baseTextureValues[4 * parcelY + 3];
+      var initialTemperature = potentialTemp - ((parcelY / sim_res_y) * guiControls.simHeight * guiControls.dryLapseRate) / 1000.0;
+      var initialCloudWater = waterTextureValues[4 * parcelY + 1];
       var prevTemp = initialTemperature;
       var prevCloudWater = initialCloudWater;
 
       var drylapsePerCell = ((-1.0 / sim_res_y) * guiControls.simHeight * guiControls.dryLapseRate) / 1000.0;
+      var cellHeightLocal = guiControls.simHeight / sim_res_y; // meters per vertical cell
 
       reachedSaturation = false;
+      var cape = 0.0;          // Convective Available Potential Energy (J/kg)
+      var cape03 = 0.0;        // CAPE limited to lowest 3 km (J/kg)
+      var cin = 0.0;           // Convective Inhibition (J/kg)
+      const g = 9.81;          // gravity (m/s^2)
+      var positiveReached = false;
+
 
       c.beginPath();
-      var scrYpos = map_range(simYpos, sim_res_y, 0, 0, graphBottem);
+      var scrYpos = map_range(parcelY, sim_res_y, 0, 0, graphBottem);
       c.moveTo(T_to_Xpos(KtoC(initialTemperature), scrYpos), scrYpos);
-      for (var y = simYpos + 1; y < sim_res_y; y++) {
+      for (var y = parcelY + 1; y < sim_res_y; y++) {
         var dT = drylapsePerCell;
 
         var cloudWater = Math.max(water - maxWater(prevTemp + dT),
@@ -7943,6 +7993,21 @@ var soundingGraph = {
 
         prevTemp = T;
         prevCloudWater = Math.max(water - maxWater(prevTemp), 0.0);
+
+        // accumulate CAPE/CIN using temperature buoyancy of parcel vs environment
+        if (wallTextureValues[4 * y + 1] != 0) {
+          var envTempK = baseTextureValues[4 * y + 3] - ((y / sim_res_y) * guiControls.simHeight * guiControls.dryLapseRate) / 1000.0;
+          var buoyancy = (T - envTempK) / envTempK;
+          if (buoyancy > 0.0) {
+            positiveReached = true;
+            cape += buoyancy * g * cellHeightLocal;
+            if (((y - surfaceLevel) * cellHeightLocal) <= 3000.0) {
+              cape03 += buoyancy * g * cellHeightLocal;
+            }
+          } else if (!positiveReached) {
+            cin += (-buoyancy) * g * cellHeightLocal;
+          }
+        }
 
         if (!reachedSaturation && prevCloudWater > 0.0) {
           reachedSaturation = true;
@@ -8165,9 +8230,29 @@ var soundingGraph = {
         c.lineWidth = 3.0;
         c.stroke();
       }
+
+      function drawHeightLabels()
+      {
+        c.font = '14px Arial';
+        c.fillStyle = 'rgba(255,255,255,0.8)';
+        c.strokeStyle = 'rgba(255,255,255,0.25)';
+        c.lineWidth = 1.0;
+
+        const stepM = 1000; // 1 km
+        for (let m = 0; m <= guiControls.simHeight; m += stepM) {
+          const yIndex = (m / guiControls.simHeight) * sim_res_y;
+          const scrYpos = map_range(yIndex, sim_res_y, 0, 0, graphBottem);
+          c.beginPath();
+          c.moveTo(8, scrYpos);
+          c.lineTo(24, scrYpos);
+          c.stroke();
+          c.fillText((m / 1000).toFixed(0) + ' km', 30, scrYpos + 5);
+        }
+      }
     }, // end of draw()
   };
   soundingGraph.init();
+  updateSoundingDiagnosticsUI();
 
   await loadingBar.set(6, 'Setting up eventlisteners');
   // END OF GRAPH
@@ -8184,14 +8269,17 @@ var soundingGraph = {
 
   var mouseXinSim, mouseYinSim;
   var prevMouseXinSim, prevMouseYinSim;
+  var soundingProbeActive = false;
+  var soundingProbeX = 0.0;
+  var soundingProbeY = 0.0;
+  var soundingProbeNeedsRedraw = false;
 
   window.addEventListener('resize', function() {
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
     canvas_aspect = canvas.width / canvas.height;
 
-    soundingGraph.graphCanvas.height = window.innerHeight;
-    soundingGraph.graphCanvas.width = window.innerHeight;
+    resizeSoundingCanvas();
 
     // Render output framebuffers need to match canvas resolution
     createBloomFBOs(); // recreate bloom framebuffers
@@ -8333,7 +8421,9 @@ var soundingGraph = {
   });
 
   canvas.addEventListener('mousedown', function(e) { mouseDownEvent(e); });
-  graphCanvas.addEventListener('mousedown', function(e) { mouseDownEvent(e); });
+  const graphCanvasEl = document.getElementById('graphCanvas');
+  if (graphCanvasEl)
+    graphCanvasEl.addEventListener('mousedown', function(e) { mouseDownEvent(e); });
 
 
   function findSimYposAboveSurfaceAtMouseX() // find the lowest location that is not underground
@@ -8627,11 +8717,18 @@ var soundingGraph = {
         for (i = 0; i < weatherStations.length; i++) {
           weatherStations[i].setHidden(true);
         }
+        for (i = 0; i < radarTowers.length; i++) {
+          radarTowers[i].setHidden(true);
+        }
       } else {
         displayWeatherStations = true;
         for (i = 0; i < weatherStations.length; i++) {
           weatherStations[i].setHidden(false);
         }
+        for (i = 0; i < radarTowers.length; i++) {
+          radarTowers[i].setHidden(false);
+        }
+        radarNeedsMeasure = true;
       }
 
       if (guiControls.tool == 'TOOL_STATION') // prevent placing weather stations when not visible
@@ -8726,6 +8823,7 @@ var soundingGraph = {
   const dispVertexShader = await loadShader('dispShader.vert');
   const realDispVertexShader = await loadShader('realDispShader.vert');
   const precipDisplayVertexShader = await loadShader('precipDisplayShader.vert');
+  const precipPhaseAccumVertexShader = await loadShader('precipPhaseAccum.vert');
   const postProcessingVertexShader = await loadShader('postProcessingShader.vert');
 
   const pressureShader = await loadShader('pressureShader.frag');
@@ -9280,6 +9378,7 @@ var soundingGraph = {
   const precipitationFeedbackTexture = gl.createTexture();
   const precipitationDepositionTexture = gl.createTexture();
   const lightningDataTexture = gl.createTexture(); // single pixel texture holding location and timing of current lightning strike
+  let phaseAccumProgram;
 
   // Static texures:
   const noiseTexture = gl.createTexture();
@@ -9295,7 +9394,7 @@ var soundingGraph = {
 
 
   frameBuff_0 = gl.createFramebuffer(); // global for weather stations
-  const frameBuff_1 = gl.createFramebuffer();
+  frameBuff_1 = gl.createFramebuffer();
 
   const curlFrameBuff = gl.createFramebuffer();
   const vortForceFrameBuff = gl.createFramebuffer();
@@ -10396,6 +10495,22 @@ var soundingGraph = {
           inputType = 21;
         else if (guiControls.tool == 'TOOL_VEGETATION')
           inputType = 22;
+        else if (guiControls.tool == 'TOOL_SOUNDING') {
+          // activate probe and skip writing to simulation fields
+          soundingProbeActive = true;
+          soundingProbeX = guiControls.wrapHorizontally ? mod(mouseXinSim, 1.0) : clamp(mouseXinSim, 0.0, 1.0);
+          soundingProbeY = clamp(mouseYinSim, 0.0, 1.0);
+          soundingProbeNeedsRedraw = true;
+          if (!guiControls.showGraph) {
+            guiControls.showGraph = true;
+            hideOrShowGraph();
+            // ensure first render happens
+            soundingProbeNeedsRedraw = true;
+          }
+          inputType = -1; // don't inject into sim
+        } else if (guiControls.tool == 'TOOL_RADAR') {
+          inputType = -1; // radar placement shouldn't paint into sim
+        }
 
         var intensity = guiControls.brushIntensity;
 
@@ -10682,7 +10797,12 @@ var soundingGraph = {
       } // end of simulation part
 
       if (guiControls.showGraph) {
-        soundingGraph.draw(Math.floor(Math.abs(mod(mouseXinSim * sim_res_x, sim_res_x))), Math.floor(mouseYinSim * sim_res_y));
+        var probeX = soundingProbeActive ? soundingProbeX : mouseXinSim;
+        var probeY = soundingProbeActive ? soundingProbeY : mouseYinSim;
+        if (!soundingProbeActive || soundingProbeNeedsRedraw) {
+          soundingGraph.draw(Math.floor(Math.abs(mod(probeX * sim_res_x, sim_res_x))), Math.floor(clamp(probeY, 0.0, 1.0) * sim_res_y));
+          soundingProbeNeedsRedraw = false; // freeze until next probe move/click
+        }
       }
 
     } // END OF NOT SETUP MODE
@@ -10691,8 +10811,9 @@ var soundingGraph = {
     let cursorType = 1.0; // normal circular brush
     if (guiControls.wholeWidth) {
       cursorType = 2.0;   // cursor whole width brush
-    } else if (SETUP_MODE || (inputType <= 0 && !bPressed && (guiControls.tool == 'TOOL_NONE' || guiControls.tool == 'TOOL_STATION'))) {
-      cursorType = 0;     // cursor off sig
+    } else if (SETUP_MODE || (inputType <= 0 && !bPressed &&
+               (guiControls.tool == 'TOOL_NONE' || guiControls.tool == 'TOOL_STATION' || guiControls.tool == 'TOOL_SOUNDING' || guiControls.tool == 'TOOL_RADAR'))) {
+      cursorType = 0;     // cursor off sig (no brush ring for station / radar placement)
     }
 
     gl.useProgram(postProcessingProgram);
@@ -10816,6 +10937,7 @@ var soundingGraph = {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null); // null is canvas
     gl.viewport(0, 0, canvas.width, canvas.height);
     gl.clearColor(0.0, 0.0, 0.0, 1.0);        // background color
+    gl.disable(gl.BLEND);
     gl.clear(gl.COLOR_BUFFER_BIT);
 
 
@@ -10824,7 +10946,7 @@ var soundingGraph = {
     gl.activeTexture(gl.TEXTURE2);
     gl.bindTexture(gl.TEXTURE_2D, wallTexture_1);
 
-    if (guiControls.displayMode == 'DISP_REAL') {
+    if (displayModeEffective == 'DISP_REAL') {
 
       { //  Abient Light Calculation
         gl.bindVertexArray(postProcessingVao);
@@ -11115,7 +11237,7 @@ var soundingGraph = {
           gl.uniform1f(gl.getUniformLocation(temperatureDisplayProgram, 'displayVectorField'), 0.0);
         }
 
-      } else if (guiControls.displayMode == 'DISP_AIRQUALITY') {
+      } else if (displayModeEffective == 'DISP_AIRQUALITY') {
         gl.useProgram(airQualityDisplayProgram);
         gl.uniform2f(gl.getUniformLocation(airQualityDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
         gl.uniform3f(gl.getUniformLocation(airQualityDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
@@ -11139,7 +11261,7 @@ var soundingGraph = {
 
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, lightTexture_0);
-      } else if (guiControls.displayMode == 'DISP_IRUPTEMP') {
+      } else if (displayModeEffective == 'DISP_IRUPTEMP') {
         gl.useProgram(IRtempDisplayProgram);
         gl.uniform2f(gl.getUniformLocation(IRtempDisplayProgram, 'aspectRatios'), sim_aspect, canvas_aspect);
         gl.uniform3f(gl.getUniformLocation(IRtempDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
@@ -11192,8 +11314,10 @@ var soundingGraph = {
         gl.uniform3f(gl.getUniformLocation(universalDisplayProgram, 'view'), cam.curXpos, cam.curYpos, cam.curZoom);
         gl.uniform4f(gl.getUniformLocation(universalDisplayProgram, 'cursor'), mouseXinSim, mouseYinSim, guiControls.brushSize * 0.5, cursorType);
         gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'Xmult'), horizontalDisplayMult);
+        gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'reflectivityMode'), 0);
+        gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'reflMult'), 1.0);
 
-        switch (guiControls.displayMode) {
+        switch (displayModeEffective) {
         case 'DISP_HORIVEL':
           gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'quantityIndex'), 0);
           gl.uniform1f(gl.getUniformLocation(universalDisplayProgram, 'dispMultiplier'), 10.0); // 20.0
@@ -11427,10 +11551,18 @@ var soundingGraph = {
 
   function hideOrShowGraph()
   {
+    ensureSoundingPanel();
+    const panelEl = document.getElementById('soundingPanel');
     if (guiControls.showGraph) {
-      soundingGraph.graphCanvas.style.display = 'block';
+      if (soundingGraph.graphCanvas)
+        soundingGraph.graphCanvas.style.display = 'block';
+      if (panelEl)
+        panelEl.style.display = 'flex';
+      resizeSoundingCanvas();
+      soundingProbeNeedsRedraw = true;
     } else {
-      soundingGraph.graphCanvas.style.display = 'none';
+      if (panelEl)
+        panelEl.style.display = 'none';
     }
   }
 
