@@ -354,6 +354,8 @@ const RADAR_PRODUCT_ZDR = 'RADAR_ZDR';
 const RADAR_PRODUCT_VIL = 'RADAR_VIL';
 const RADAR_PRODUCT_EHT = 'RADAR_EHT';
 const RADAR_PRODUCT_VILD = 'RADAR_VILD';
+const RADAR_PRODUCT_POSH = 'RADAR_POSH';
+const RADAR_PRODUCT_MEHS = 'RADAR_MEHS';
 const RADAR_PRODUCT_KDP = 'RADAR_KDP';
 const RADAR_PRODUCT_RADIAL_VELOCITY = 'RADAR_RADIAL_VELOCITY';
 const RADAR_PANEL_MODE_COMPOSITE = 'RADAR_PANEL_MODE_COMPOSITE';
@@ -452,6 +454,22 @@ const RADAR_PRODUCTS = Object.freeze([
     displayMode : 'DISP_VILD',
   },
   {
+    id : RADAR_PRODUCT_POSH,
+    label : 'posh',
+    launcherLabel : 'posh',
+    shortDescription : 'Probability of severe hail',
+    isImplemented : false,
+    displayMode : null,
+  },
+  {
+    id : RADAR_PRODUCT_MEHS,
+    label : 'mehs',
+    launcherLabel : 'mehs',
+    shortDescription : 'Maximum expected hail size',
+    isImplemented : false,
+    displayMode : null,
+  },
+  {
     id : RADAR_PRODUCT_EHT,
     label : 'eht',
     launcherLabel : 'eht',
@@ -487,6 +505,8 @@ const RADAR_PRODUCT_PAL_CODES_BY_ID = Object.freeze({
   [RADAR_PRODUCT_VIL] : [ 'VIL' ],
   [RADAR_PRODUCT_EHT] : [ 'EHT', 'ET', 'TOPS' ],
   [RADAR_PRODUCT_VILD] : [ 'VILD' ],
+  [RADAR_PRODUCT_POSH] : [ 'POSH' ],
+  [RADAR_PRODUCT_MEHS] : [ 'MEHS', 'MESH' ],
   [RADAR_PRODUCT_KDP] : [ 'KDP', 'PHI' ],
   [RADAR_PRODUCT_RADIAL_VELOCITY] : [ 'BV', 'DV', 'SRV', 'VEL', 'VR' ],
 });
@@ -6348,6 +6368,13 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     return Number(value).toFixed(digits).replace(/\.?0+$/, '');
   }
 
+  function isCompositeRadarProductSelectable(productId)
+  {
+    return productId == RADAR_PRODUCT_REFLECTIVITY ||
+      productId == RADAR_PRODUCT_POSH ||
+      productId == RADAR_PRODUCT_MEHS;
+  }
+
   function getVisibleRadarProductsForPanelMode()
   {
     if (radarPanelMode == RADAR_PANEL_MODE_COMPOSITE) {
@@ -6357,7 +6384,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
           product.id != RADAR_PRODUCT_KDP
         );
       }
-      return RADAR_PRODUCTS.filter((product) => product.id == RADAR_PRODUCT_REFLECTIVITY);
+      return RADAR_PRODUCTS.filter((product) => isCompositeRadarProductSelectable(product.id));
     }
     return RADAR_PRODUCTS;
   }
@@ -6696,7 +6723,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     radarPanelMode = mode;
     radarPanelModeForMarkers = mode;
 
-    if (mode == RADAR_PANEL_MODE_COMPOSITE && guiControls.selectedRadarProduct != RADAR_PRODUCT_REFLECTIVITY) {
+    if (mode == RADAR_PANEL_MODE_COMPOSITE && !isCompositeRadarProductSelectable(guiControls.selectedRadarProduct)) {
       setSelectedRadarProduct(RADAR_PRODUCT_REFLECTIVITY, {activateIfImplemented : true});
       return;
     }
@@ -7652,7 +7679,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   function setSelectedRadarProduct(productId, options = {})
   {
     const product = getRadarProductMeta(productId);
-    if (radarPanelMode == RADAR_PANEL_MODE_COMPOSITE && product.id != RADAR_PRODUCT_REFLECTIVITY)
+    if (radarPanelMode == RADAR_PANEL_MODE_COMPOSITE && !isCompositeRadarProductSelectable(product.id))
       guiControls.selectedRadarProduct = RADAR_PRODUCT_REFLECTIVITY;
     else
       guiControls.selectedRadarProduct = product.id;
