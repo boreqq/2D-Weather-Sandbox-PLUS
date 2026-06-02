@@ -3419,7 +3419,7 @@ function ensureSoundingPanel()
                 <th>MLCIN (J/kg)</th>
                 <th>0-3 km LR (°C/km)</th>
                 <th>3-6 km LR (°C/km)</th>
-                <th>0-6 LCL (m)</th>
+                <th>SFC LCL (m)</th>
                 <th>PWAT (mm)</th>
               </tr>
             </thead>
@@ -7720,7 +7720,7 @@ function ensureSoundingPanel()
                 <th>MLCIN (J/kg)</th>
                 <th>0-3 km LR (°C/km)</th>
                 <th>3-6 km LR (°C/km)</th>
-                <th>0-6 LCL (m)</th>
+                <th>SFC LCL (m)</th>
                 <th>PWAT (mm)</th>
               </tr>
             </thead>
@@ -7803,6 +7803,17 @@ var soundingGraph = {
       var wallTextureValues = new Int32Array(4 * sim_res_y);
       gl.readPixels(simXpos, 0, 1, sim_res_y, gl.RGBA_INTEGER, gl.INT, wallTextureValues); // read a vertical column of cells
 
+      function envTempKAt(y)
+      {
+        return baseTextureValues[4 * y + 3] - ((y / sim_res_y) * guiControls.simHeight * guiControls.dryLapseRate) / 1000.0;
+      }
+
+      function totalWaterAt(y) { return Math.max(waterTextureValues[4 * y + 0], 0.0); }
+
+      function cloudWaterAt(y) { return Math.max(waterTextureValues[4 * y + 1], 0.0); }
+
+      function vaporWaterAt(y) { return Math.max(totalWaterAt(y) - cloudWaterAt(y), 0.0); }
+
 
       const graphBottem = this.graphCanvas.height - 40; // in pixels
 
@@ -7844,9 +7855,10 @@ var soundingGraph = {
 
             // surface diagnostics
             surfaceTempC = temp;
-            surfaceDewC = KtoC(dewpoint(waterTextureValues[4 * y]));
-            const tempK = baseTextureValues[4 * y + 3] - ((y / sim_res_y) * guiControls.simHeight * guiControls.dryLapseRate) / 1000.0;
-            surfaceRH = relativeHumd(tempK, waterTextureValues[4 * y]);
+            const tempK = envTempKAt(y);
+            const surfaceVapor = vaporWaterAt(y);
+            surfaceDewC = Math.min(temp, KtoC(dewpoint(surfaceVapor)));
+            surfaceRH = clamp(relativeHumd(tempK, surfaceVapor), 0.0, 100.0);
           }
           if (reachedAir && y == simYpos) {
             // c.fillText('' + Math.round(map_range(y-1, 0, sim_res_y, 0,
@@ -7911,12 +7923,10 @@ var soundingGraph = {
 
         if (wallTextureValues[4 * y + 1] != 0) { // fluid cell
 
-          var dewPoint = KtoC(dewpoint(waterTextureValues[4 * y]));
+          var dewPoint = KtoC(dewpoint(vaporWaterAt(y)));
 
-          var temp = baseTextureValues[4 * y + 3] - ((y / sim_res_y) * guiControls.simHeight * guiControls.dryLapseRate) / 1000.0 - 273.15;
-          if (guiControls.realDewPoint) {
-            dewPoint = Math.min(temp, dewPoint);
-          }
+          var temp = envTempKAt(y) - 273.15;
+          dewPoint = Math.min(temp, dewPoint);
 
           var scrYpos = map_range(y, sim_res_y, 0, 0, graphBottem);
 
@@ -7952,10 +7962,9 @@ var soundingGraph = {
       // Draw rising parcel temperature line
       // Force parcel sampling to surface level of this column only (ignore cursor Y)
       var parcelY = surfaceLevel;
-      var water = waterTextureValues[4 * parcelY];
-      var potentialTemp = baseTextureValues[4 * parcelY + 3];
-      var initialTemperature = potentialTemp - ((parcelY / sim_res_y) * guiControls.simHeight * guiControls.dryLapseRate) / 1000.0;
-      var initialCloudWater = waterTextureValues[4 * parcelY + 1];
+      var water = vaporWaterAt(parcelY);
+      var initialTemperature = envTempKAt(parcelY);
+      var initialCloudWater = Math.max(water - maxWater(initialTemperature), 0.0);
       var prevTemp = initialTemperature;
       var prevCloudWater = initialCloudWater;
 
@@ -7967,7 +7976,7 @@ var soundingGraph = {
       var cape03 = 0.0;        // CAPE limited to lowest 3 km (J/kg)
       var cin = 0.0;           // Convective Inhibition (J/kg)
       const g = 9.81;          // gravity (m/s^2)
-      var positiveReached = false;
+      const minMeaningfulCape = 1.0;
 
 
       c.beginPath();
@@ -7993,21 +8002,6 @@ var soundingGraph = {
 
         prevTemp = T;
         prevCloudWater = Math.max(water - maxWater(prevTemp), 0.0);
-
-        // accumulate CAPE/CIN using temperature buoyancy of parcel vs environment
-        if (wallTextureValues[4 * y + 1] != 0) {
-          var envTempK = baseTextureValues[4 * y + 3] - ((y / sim_res_y) * guiControls.simHeight * guiControls.dryLapseRate) / 1000.0;
-          var buoyancy = (T - envTempK) / envTempK;
-          if (buoyancy > 0.0) {
-            positiveReached = true;
-            cape += buoyancy * g * cellHeightLocal;
-            if (((y - surfaceLevel) * cellHeightLocal) <= 3000.0) {
-              cape03 += buoyancy * g * cellHeightLocal;
-            }
-          } else if (!positiveReached) {
-            cin += (-buoyancy) * g * cellHeightLocal;
-          }
-        }
 
         if (!reachedSaturation && prevCloudWater > 0.0) {
           reachedSaturation = true;
@@ -8060,13 +8054,13 @@ var soundingGraph = {
           prevCloud = Math.max(parcelWater - maxWater(prevT), 0.0);
 
           if (wallTextureValues[4 * yy + 1] != 0) {
-            var envTk = baseTextureValues[4 * yy + 3] - ((yy / sim_res_y) * guiControls.simHeight * guiControls.dryLapseRate) / 1000.0;
+            var envTk = envTempKAt(yy);
             var buoy = (parcelTk - envTk) / envTk;
             if (buoy > 0.0) {
               positiveReachedLocal = true;
               negAfterPos = 0; // reset negative counter once buoyancy is positive again
               localCape += buoy * g * cellHeightLocal;
-              if (((yy - surfaceLevel) * cellHeightLocal) <= 3000.0) {
+              if (((yy - startY) * cellHeightLocal) <= 3000.0) {
                 localCape03 += buoy * g * cellHeightLocal;
               }
             } else if (!positiveReachedLocal) {
@@ -8078,8 +8072,13 @@ var soundingGraph = {
             }
           }
         }
-        return {cape: localCape, cin: localCin, cape03: localCape03};
+        return {cape: localCape, cin: localCape >= minMeaningfulCape ? localCin : 0.0, cape03: localCape03};
       }
+
+      var surfaceEnergy = integrateParcelEnergies(surfaceLevel, water, initialTemperature);
+      cape = surfaceEnergy.cape;
+      cin = surfaceEnergy.cin;
+      cape03 = surfaceEnergy.cape03;
 
       // mixed-layer (0-1 km) parcel using potential temperature (theta) and vapor mixing ratio (qv)
       const mlDepth = 1000.0; // meters
@@ -8089,7 +8088,7 @@ var soundingGraph = {
       for (var yy = surfaceLevel; yy < sim_res_y && ((yy - surfaceLevel) * cellHeightLocal) <= mlDepth; yy++) {
         if (wallTextureValues[4 * yy + 1] == 0) continue; // skip non-fluid
         const theta = baseTextureValues[4 * yy + 3];          // stored as potential temperature (K)
-        const qv = Math.max(waterTextureValues[4 * yy + 0], 0.0); // vapor only (channel 0)
+        const qv = vaporWaterAt(yy);
         mlSumTheta += theta;
         mlSumQv += qv;
         mlCount++;
@@ -8111,47 +8110,60 @@ var soundingGraph = {
         mlEnergy.cin = mlEnergy.cin * (1 - blend) + surfEnergy.cin * blend;
       }
 
-      // precipitable water (PWAT) integrated hydrostatically using Td-derived qv
+      // Precipitable water from the sim's vapor concentration (g/m3).
       function computePWATmm(surfaceLevel, topMeters = 12000.0)
       {
-        const Rd = 287.05;   // J/(kg*K)
-        const rhoW = 1000.0; // kg/m^3
-        let p_hPa = 1013.25; // starting surface pressure (hPa)
-        let pw_kg_m2 = 0.0;
+        let vapor_g_m2 = 0.0;
         const maxCells = Math.min(sim_res_y - 1, surfaceLevel + Math.floor(topMeters / cellHeightLocal));
-
-        const satVaporPressure = (Tc) => 6.112 * Math.exp((17.67 * Tc) / (Tc + 243.5)); // hPa
-        const mixingRatioFromTd = (TdC, p_hPa_local) => {
-          const e = satVaporPressure(TdC);
-          return 0.622 * e / Math.max(p_hPa_local - e, 1e-3); // kg/kg
-        };
 
         for (let yy = surfaceLevel; yy <= maxCells; yy++) {
           if (wallTextureValues[4 * yy + 1] == 0) continue;
-          const envTk = baseTextureValues[4 * yy + 3] - ((yy / sim_res_y) * guiControls.simHeight * guiControls.dryLapseRate) / 1000.0;
-          const TdK = dewpoint(waterTextureValues[4 * yy + 0]);
-          const qv = mixingRatioFromTd(TdK - 273.15, p_hPa); // kg/kg from Td
-          const rho = (p_hPa * 100) / (Rd * envTk);
-          const dz = cellHeightLocal;
-          pw_kg_m2 += rho * qv * dz;
-          p_hPa *= Math.exp((-g * dz) / (Rd * envTk));
+          vapor_g_m2 += vaporWaterAt(yy) * cellHeightLocal;
         }
-        return (pw_kg_m2 / rhoW) * 1000.0; // mm
+        return vapor_g_m2 / 1000.0; // g/m2 -> kg/m2 -> mm water
       }
 
       const pwatMm = computePWATmm(surfaceLevel, guiControls.simHeight);
 
       // --- Most-unstable CAPE (MU) in lowest 3 km ---
-      var muEnergy = {cape: 0.0, cin: 0.0};
-      var maxCape = -1.0;
+      var muEnergy = surfaceEnergy;
+      var maxCape = surfaceEnergy.cape;
       const muTopMeters = 3000.0;
+      const muLayerDepthMeters = 500.0;
       const maxMuY = Math.min(sim_res_y - 1, Math.floor(surfaceLevel + muTopMeters / cellHeightLocal));
-      for (var yy = surfaceLevel; yy <= maxMuY; yy++) {
+
+      function averageMuLayerParcel(centerY)
+      {
+        const halfLayerCells = Math.max(1, Math.round((muLayerDepthMeters * 0.5) / cellHeightLocal));
+        const minY = Math.max(surfaceLevel, centerY - halfLayerCells);
+        const maxY = Math.min(maxMuY, centerY + halfLayerCells);
+        const minLayerCells = Math.max(1, Math.ceil((maxY - minY + 1) * 0.5));
+        let thetaSum = 0.0;
+        let qvSum = 0.0;
+        let count = 0;
+
+        for (let layerY = minY; layerY <= maxY; layerY++) {
+          if (wallTextureValues[4 * layerY + 1] == 0) continue;
+          thetaSum += baseTextureValues[4 * layerY + 3];
+          qvSum += vaporWaterAt(layerY);
+          count++;
+        }
+
+        if (count < minLayerCells)
+          return null;
+
+        const theta = thetaSum / count;
+        return {
+          tempK : potentialToRealT(theta, centerY),
+          water : qvSum / count,
+        };
+      }
+
+      for (var yy = surfaceLevel + 1; yy <= maxMuY; yy++) {
         if (wallTextureValues[4 * yy + 1] == 0) continue;
-        const thetaMu = baseTextureValues[4 * yy + 3];
-        const qvMu = Math.max(waterTextureValues[4 * yy + 0], 0.0);
-        const tempMu = potentialToRealT(thetaMu, yy);
-        const energy = integrateParcelEnergies(yy, qvMu, tempMu);
+        const muParcel = averageMuLayerParcel(yy);
+        if (!muParcel) continue;
+        const energy = integrateParcelEnergies(yy, muParcel.water, muParcel.tempK);
         if (energy.cape > maxCape) {
           maxCape = energy.cape;
           muEnergy = energy;
@@ -8160,22 +8172,23 @@ var soundingGraph = {
 
       function envTempAtHeight(meters)
       {
-        const yIdx = Math.min(sim_res_y - 1, Math.max(surfaceLevel, Math.round(surfaceLevel + meters / cellHeightLocal)));
-        const envTempK = baseTextureValues[4 * yIdx + 3] - ((yIdx / sim_res_y) * guiControls.simHeight * guiControls.dryLapseRate) / 1000.0;
-        return KtoC(envTempK);
+        const yIdx = Math.round(surfaceLevel + meters / cellHeightLocal);
+        if (yIdx < surfaceLevel || yIdx >= sim_res_y || wallTextureValues[4 * yIdx + 1] == 0)
+          return null;
+        return KtoC(envTempKAt(yIdx));
       }
 
       let lr03 = null, lr36 = null;
-      if (guiControls.simHeight >= 3000) {
-        const t0 = envTempAtHeight(0);
-        const t3 = envTempAtHeight(3000);
-        lr03 = (t0 - t3) / 3.0;
+      function lapseRateBetween(bottomMeters, topMeters)
+      {
+        const tBottom = envTempAtHeight(bottomMeters);
+        const tTop = envTempAtHeight(topMeters);
+        if (tBottom == null || tTop == null)
+          return null;
+        return (tBottom - tTop) / ((topMeters - bottomMeters) / 1000.0);
       }
-      if (guiControls.simHeight >= 6000) {
-        const t3 = envTempAtHeight(3000);
-        const t6 = envTempAtHeight(6000);
-        lr36 = (t3 - t6) / 3.0;
-      }
+      lr03 = lapseRateBetween(0, 3000);
+      lr36 = lapseRateBetween(3000, 6000);
 
       let lclMeters = null;
       if (surfaceTempC != null && surfaceDewC != null) {
