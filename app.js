@@ -3369,6 +3369,7 @@ var soundingDiagnostics = {
   lr03 : null,
   lr36 : null,
   lcl : null,
+  liftedIndex : null,
   hailIndex : null,
 };
 
@@ -3397,11 +3398,13 @@ function ensureSoundingPanel()
                 <span>HAIL POTENTIAL INDEX (HPI)</span>
                 <button type="button" class="sounding-info-button" id="hpiInfoButton" aria-label="HPI information">i</button>
               </th>
+              <th title="Approximate lifted index using a diagnostic hydrostatic 500 hPa level.">LIFTED INDEX</th>
             </tr>
           </thead>
           <tbody>
             <tr>
               <td id="hailIndexVal">--</td>
+              <td id="liVal">--</td>
             </tr>
           </tbody>
         </table>
@@ -3483,6 +3486,7 @@ function updateSoundingDiagnosticsUI()
     cape : 'capeVal',
     mlCape : 'mlCapeVal',
     sbCape : 'sbCapeVal',
+    liftedIndex : 'liVal',
     pwat : 'pwatVal',
     cin : 'cinVal',
     mlCin : 'mlCinVal',
@@ -7752,11 +7756,13 @@ function ensureSoundingPanel()
                 <span>HAIL POTENTIAL INDEX (HPI)</span>
                 <button type="button" class="sounding-info-button" id="hpiInfoButton" aria-label="HPI information">i</button>
               </th>
+              <th title="Approximate lifted index using a diagnostic hydrostatic 500 hPa level.">LIFTED INDEX</th>
             </tr>
           </thead>
           <tbody>
             <tr>
               <td id="hailIndexVal">--</td>
+              <td id="liVal">--</td>
             </tr>
           </tbody>
         </table>
@@ -8209,6 +8215,80 @@ var soundingGraph = {
 
       const pwatMm = computePWATmm(surfaceLevel, guiControls.simHeight);
 
+      function envTempKAtFloat(yFloat)
+      {
+        const y0 = Math.max(surfaceLevel, Math.min(sim_res_y - 1, Math.floor(yFloat)));
+        const y1 = Math.max(surfaceLevel, Math.min(sim_res_y - 1, y0 + 1));
+        const t = clamp(yFloat - y0, 0.0, 1.0);
+        return mixJS(envTempKAt(y0), envTempKAt(y1), t);
+      }
+
+      function yAtDiagnosticPressure(targetHPa)
+      {
+        const Rd = 287.05;
+        let pressureHPa = 1013.25;
+        let previousPressureHPa = pressureHPa;
+        let previousY = surfaceLevel;
+
+        for (let yy = surfaceLevel + 1; yy < sim_res_y; yy++) {
+          if (wallTextureValues[4 * yy + 1] == 0) continue;
+          const dz = (yy - previousY) * cellHeightLocal;
+          const layerTempK = Math.max((envTempKAt(previousY) + envTempKAt(yy)) * 0.5, 180.0);
+          pressureHPa *= Math.exp((-g * dz) / (Rd * layerTempK));
+
+          if (pressureHPa <= targetHPa) {
+            const pressureDelta = pressureHPa - previousPressureHPa;
+            const frac = Math.abs(pressureDelta) > 1e-6 ? clamp((targetHPa - previousPressureHPa) / pressureDelta, 0.0, 1.0) : 0.0;
+            return previousY + (yy - previousY) * frac;
+          }
+
+          previousPressureHPa = pressureHPa;
+          previousY = yy;
+        }
+
+        return null;
+      }
+
+      function liftedParcelTempAtY(targetY, parcelWater, parcelTempK)
+      {
+        if (!Number.isFinite(targetY) || targetY <= surfaceLevel)
+          return parcelTempK;
+
+        let prevT = parcelTempK;
+        let prevCloud = Math.max(parcelWater - maxWater(prevT), 0.0);
+        const endY = Math.min(targetY, sim_res_y - 1);
+
+        for (let yy = surfaceLevel + 1; yy <= Math.ceil(endY); yy++) {
+          const yFrom = yy - 1;
+          const yTo = Math.min(yy, endY);
+          const cellFraction = clamp(yTo - yFrom, 0.0, 1.0);
+          if (cellFraction <= 0.0)
+            continue;
+
+          const dTlocal = drylapsePerCell * cellFraction;
+          const cloudLocal = Math.max(parcelWater - maxWater(prevT + dTlocal), 0.0);
+          const dWtLocal = (cloudLocal - prevCloud) * guiControls.evapHeat;
+          const actualChange = dT_saturated(dTlocal, dWtLocal);
+          prevT += actualChange;
+          prevCloud = Math.max(parcelWater - maxWater(prevT), 0.0);
+        }
+
+        return prevT;
+      }
+
+      function calcLiftedIndex()
+      {
+        const targetY = yAtDiagnosticPressure(500.0);
+        if (targetY == null)
+          return null;
+
+        const envTempK = envTempKAtFloat(targetY);
+        const parcelTempK = liftedParcelTempAtY(targetY, water, initialTemperature);
+        return envTempK - parcelTempK;
+      }
+
+      const liftedIndex = calcLiftedIndex();
+
       // --- Most-unstable CAPE (MU) in lowest 3 km ---
       var muEnergy = surfaceEnergy;
       var maxCape = surfaceEnergy.cape;
@@ -8355,6 +8435,7 @@ var soundingGraph = {
       soundingDiagnostics.lr03 = lr03;
       soundingDiagnostics.lr36 = lr36;
       soundingDiagnostics.lcl = lclMeters;
+      soundingDiagnostics.liftedIndex = liftedIndex;
       soundingDiagnostics.hailIndex = hailIndex;
       updateSoundingDiagnosticsUI();
 

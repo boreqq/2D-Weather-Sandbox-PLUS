@@ -332,17 +332,21 @@
         }
 
         .sounding-tables {
-            margin-top: 10px;
+            margin-top: 8px;
             display: grid;
             gap: 8px;
         }
 
         .sounding-hail-index {
-            margin-top: 10px;
+            margin-top: 8px;
         }
 
         .sounding-hail-index th {
             white-space: nowrap;
+        }
+
+        .sounding-hail-index table {
+            table-layout: fixed;
         }
 
         .sounding-info-button {
@@ -418,19 +422,24 @@
         .sounding-table {
             background: rgba(255, 255, 255, 0.03);
             border-radius: 10px;
-            padding: 10px;
+            padding: 6px 10px;
             border: 1px solid rgba(255, 255, 255, 0.06);
+            min-height: 74px;
+            display: flex;
+            align-items: center;
+            box-sizing: border-box;
         }
 
         .sounding-table table {
             width: 100%;
+            margin: 0;
             border-collapse: collapse;
             font-size: 0.95rem;
         }
 
         .sounding-table th,
         .sounding-table td {
-            padding: 8px 6px;
+            padding: 5px 6px;
             text-align: center;
             border-bottom: 1px solid rgba(255, 255, 255, 0.07);
         }
