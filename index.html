@@ -337,6 +337,84 @@
             gap: 8px;
         }
 
+        .sounding-hail-index {
+            margin-top: 10px;
+        }
+
+        .sounding-hail-index th {
+            white-space: nowrap;
+        }
+
+        .sounding-info-button {
+            width: 22px;
+            height: 22px;
+            margin-left: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            border-radius: 50%;
+            background: rgba(74, 144, 226, 0.95);
+            color: #ffffff;
+            font-size: 0.85rem;
+            font-weight: 700;
+            line-height: 1;
+            cursor: pointer;
+            vertical-align: middle;
+        }
+
+        .sounding-info-button:hover {
+            background: rgba(0, 123, 255, 1);
+        }
+
+        .sounding-info-modal[hidden] {
+            display: none;
+        }
+
+        .sounding-info-modal {
+            position: fixed;
+            inset: 0;
+            z-index: 8;
+            display: flex;
+            align-items: flex-start;
+            justify-content: center;
+            padding: 72px 24px 24px;
+            background: rgba(0, 0, 0, 0.35);
+        }
+
+        .sounding-info-modal__panel {
+            width: min(760px, calc(100vw - 48px));
+            background: rgba(9, 13, 27, 0.96);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 10px;
+            padding: 18px 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55);
+            color: #f1f5ff;
+            position: relative;
+        }
+
+        .sounding-info-modal__panel h4 {
+            margin: 0 36px 10px 0;
+            font-size: 1rem;
+        }
+
+        .sounding-info-modal__panel p {
+            margin: 10px 0 0;
+            line-height: 1.45;
+            color: rgba(241, 245, 255, 0.9);
+        }
+
+        .sounding-info-modal__close {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            width: 28px;
+            height: 28px;
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            border-radius: 8px;
+            background: rgba(12, 16, 28, 0.8);
+            color: #f1f3ff;
+            font-size: 1rem;
+            cursor: pointer;
+        }
+
         .sounding-table {
             background: rgba(255, 255, 255, 0.03);
             border-radius: 10px;

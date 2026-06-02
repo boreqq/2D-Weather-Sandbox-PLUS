@@ -3369,13 +3369,16 @@ var soundingDiagnostics = {
   lr03 : null,
   lr36 : null,
   lcl : null,
+  hailIndex : null,
 };
 
 // Ensure the sounding panel HTML exists (created dynamically so it's not in the intro DOM)
 function ensureSoundingPanel()
 {
-  if (document.getElementById('soundingPanel'))
+  if (document.getElementById('soundingPanel')) {
+    setupSoundingInfoModal();
     return;
+  }
 
   const panelHtml = `
     <div id="soundingPanel" class="sounding-panel" style="display:none;">
@@ -3385,6 +3388,32 @@ function ensureSoundingPanel()
       </div>
       <div class="sounding-graph-wrapper" id="soundingGraphWrapper">
         <canvas id="graphCanvas"></canvas>
+      </div>
+      <div class="sounding-table sounding-hail-index">
+        <table>
+          <thead>
+            <tr>
+              <th>
+                <span>HAIL POTENTIAL INDEX (HPI)</span>
+                <button type="button" class="sounding-info-button" id="hpiInfoButton" aria-label="HPI information">i</button>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td id="hailIndexVal">--</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="sounding-info-modal" id="hpiInfoModal" hidden>
+        <div class="sounding-info-modal__panel" role="dialog" aria-modal="true" aria-labelledby="hpiInfoTitle">
+          <button type="button" class="sounding-info-modal__close" id="hpiInfoClose" aria-label="Close HPI information">x</button>
+          <h4 id="hpiInfoTitle">HPI (Hail Potential Index)</h4>
+          <p>HPI is a 0-10 forecast-style index for the environment's support for hail. It is not a percentage and it does not predict exact hail size.</p>
+          <p>0-1 means no meaningful hail signal, 1-3 low potential, 3-5 marginal to moderate potential, 5-7 elevated hail potential, 7-9 high potential, and 9-10 a significant hail environment.</p>
+          <p>The value combines instability, mid-level lapse rates, the 0C level, 0-6 km shear, CIN, and moisture. Higher values mean the sounding is more supportive of hail growth and survival to the surface.</p>
+        </div>
       </div>
       <div class="sounding-tables">
         <div class="sounding-table">
@@ -3441,6 +3470,7 @@ function ensureSoundingPanel()
   const container = document.createElement('div');
   container.innerHTML = panelHtml.trim();
   document.body.appendChild(container.firstChild);
+  setupSoundingInfoModal();
 }
 
 function updateSoundingDiagnosticsUI()
@@ -3466,6 +3496,31 @@ function updateSoundingDiagnosticsUI()
     if (el)
       el.textContent = formatVal(soundingDiagnostics[key]);
   }
+
+  const hailIndexEl = document.getElementById('hailIndexVal');
+  if (hailIndexEl)
+    hailIndexEl.textContent = Number.isFinite(soundingDiagnostics.hailIndex) ? soundingDiagnostics.hailIndex.toFixed(1) : '--';
+}
+
+function setupSoundingInfoModal()
+{
+  const button = document.getElementById('hpiInfoButton');
+  const modal = document.getElementById('hpiInfoModal');
+  const closeButton = document.getElementById('hpiInfoClose');
+  if (!button || !modal || !closeButton || button.dataset.boundInfo == '1')
+    return;
+
+  const closeModal = () => { modal.hidden = true; };
+  button.dataset.boundInfo = '1';
+  button.addEventListener('click', function(event) {
+    event.stopPropagation();
+    modal.hidden = false;
+  });
+  closeButton.addEventListener('click', closeModal);
+  modal.addEventListener('click', function(event) {
+    if (event.target == modal)
+      closeModal();
+  });
 }
 
 function resizeSoundingCanvas()
@@ -7675,8 +7730,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
 function ensureSoundingPanel()
 {
-  if (document.getElementById('soundingPanel'))
+  if (document.getElementById('soundingPanel')) {
+    setupSoundingInfoModal();
     return;
+  }
 
   const panelHtml = `
     <div id="soundingPanel" class="sounding-panel" style="display:none;">
@@ -7686,6 +7743,32 @@ function ensureSoundingPanel()
       </div>
       <div class="sounding-graph-wrapper" id="soundingGraphWrapper">
         <canvas id="graphCanvas"></canvas>
+      </div>
+      <div class="sounding-table sounding-hail-index">
+        <table>
+          <thead>
+            <tr>
+              <th>
+                <span>HAIL POTENTIAL INDEX (HPI)</span>
+                <button type="button" class="sounding-info-button" id="hpiInfoButton" aria-label="HPI information">i</button>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td id="hailIndexVal">--</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="sounding-info-modal" id="hpiInfoModal" hidden>
+        <div class="sounding-info-modal__panel" role="dialog" aria-modal="true" aria-labelledby="hpiInfoTitle">
+          <button type="button" class="sounding-info-modal__close" id="hpiInfoClose" aria-label="Close HPI information">x</button>
+          <h4 id="hpiInfoTitle">HPI (Hail Potential Index)</h4>
+          <p>HPI is a 0-10 forecast-style index for the environment's support for hail. It is not a percentage and it does not predict exact hail size.</p>
+          <p>0-1 means no meaningful hail signal, 1-3 low potential, 3-5 marginal to moderate potential, 5-7 elevated hail potential, 7-9 high potential, and 9-10 a significant hail environment.</p>
+          <p>The value combines instability, mid-level lapse rates, the 0C level, 0-6 km shear, CIN, and moisture. Higher values mean the sounding is more supportive of hail growth and survival to the surface.</p>
+        </div>
       </div>
       <div class="sounding-tables">
         <div class="sounding-table">
@@ -7742,6 +7825,7 @@ function ensureSoundingPanel()
   const container = document.createElement('div');
   container.innerHTML = panelHtml.trim();
   document.body.appendChild(container.firstChild);
+  setupSoundingInfoModal();
 }
 
 var soundingGraph = {
@@ -8190,10 +8274,73 @@ var soundingGraph = {
       lr03 = lapseRateBetween(0, 3000);
       lr36 = lapseRateBetween(3000, 6000);
 
+      function zeroCLevelMeters()
+      {
+        let prevMeters = null;
+        let prevTempC = null;
+
+        for (let yy = surfaceLevel; yy < sim_res_y; yy++) {
+          if (wallTextureValues[4 * yy + 1] == 0) continue;
+          const meters = (yy - surfaceLevel) * cellHeightLocal;
+          const tempC = KtoC(envTempKAt(yy));
+          if (tempC <= 0.0) {
+            if (prevMeters == null)
+              return meters;
+            const tempDelta = tempC - prevTempC;
+            const cross = Math.abs(tempDelta) > 1e-6 ? clamp((0.0 - prevTempC) / tempDelta, 0.0, 1.0) : 0.0;
+            return prevMeters + (meters - prevMeters) * cross;
+          }
+          prevMeters = meters;
+          prevTempC = tempC;
+        }
+
+        return null;
+      }
+
+      function windMsAtHeight(meters)
+      {
+        const yIdx = Math.round(surfaceLevel + meters / cellHeightLocal);
+        if (yIdx < surfaceLevel || yIdx >= sim_res_y || wallTextureValues[4 * yIdx + 1] == 0)
+          return null;
+        return rawVelocityTo_ms(baseTextureValues[4 * yIdx + 0]);
+      }
+
+      function shear06Ms()
+      {
+        const surfaceWind = windMsAtHeight(0.0);
+        const wind6km = windMsAtHeight(6000.0);
+        if (surfaceWind == null || wind6km == null)
+          return null;
+        return Math.abs(wind6km - surfaceWind);
+      }
+
+      function calcHailIndex()
+      {
+        const zeroC = zeroCLevelMeters();
+        const shear06 = shear06Ms();
+        const capeFactor = smoothstepJS(300.0, 2500.0, muEnergy.cape);
+        const lapseFactor = Number.isFinite(lr36) ? smoothstepJS(6.0, 8.5, lr36) : 0.0;
+        const freezeFactor = Number.isFinite(zeroC) ?
+          smoothstepJS(700.0, 2000.0, zeroC) * (1.0 - smoothstepJS(4500.0, 6500.0, zeroC)) :
+          0.0;
+        const shearFactor = Number.isFinite(shear06) ? mixJS(0.75, 1.25, smoothstepJS(8.0, 22.0, shear06)) : 0.85;
+        const effectiveCin = Math.min(
+          Number.isFinite(cin) ? cin : 999.0,
+          Number.isFinite(mlEnergy.cin) ? mlEnergy.cin : 999.0,
+          Number.isFinite(muEnergy.cin) ? muEnergy.cin : 999.0
+        );
+        const cinFactor = 1.0 - smoothstepJS(50.0, 200.0, effectiveCin);
+        const moistureFactor = smoothstepJS(8.0, 18.0, pwatMm) * (1.0 - smoothstepJS(45.0, 65.0, pwatMm));
+
+        return clamp(10.0 * capeFactor * lapseFactor * freezeFactor * shearFactor * cinFactor * moistureFactor, 0.0, 10.0);
+      }
+
       let lclMeters = null;
       if (surfaceTempC != null && surfaceDewC != null) {
         lclMeters = Math.max(0, 125.0 * (surfaceTempC - surfaceDewC));
       }
+
+      const hailIndex = calcHailIndex();
 
       soundingDiagnostics.cape = cape;
       soundingDiagnostics.sbCape = muEnergy.cape; // now MU CAPE
@@ -8208,6 +8355,7 @@ var soundingGraph = {
       soundingDiagnostics.lr03 = lr03;
       soundingDiagnostics.lr36 = lr36;
       soundingDiagnostics.lcl = lclMeters;
+      soundingDiagnostics.hailIndex = hailIndex;
       updateSoundingDiagnosticsUI();
 
 
