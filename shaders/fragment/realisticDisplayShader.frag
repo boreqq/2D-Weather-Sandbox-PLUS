@@ -80,11 +80,11 @@ const vec3 dryGrassCol = pow(vec3(0.843, 0.588, 0.294), vec3(GAMMA));
 
 vec4 surfaceTexture(int index, vec2 pos)
 {
-#define numTextures 5.;             // number of textures in the map
-  const float texRelHeight = 1. / numTextures;
+  const float numTextures = 5.0;     // number of textures in the map
+  const float texRelHeight = 1.0 / numTextures;
+  pos.x = fract(pos.x / numTextures);
   pos.y = clamp(pos.y, 0.01, 0.99); // make sure position is within the subtexture
-  pos /= numTextures;
-  pos.y += float(index) * texRelHeight;
+  pos.y = (pos.y + float(index)) * texRelHeight;
   return texture(surfaceTextureMap, pos);
 }
 
