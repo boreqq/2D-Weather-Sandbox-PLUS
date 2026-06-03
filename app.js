@@ -649,15 +649,22 @@ const DEFAULT_RADAR_PALETTE_DEFINITIONS = Object.freeze({
   [RADAR_PRODUCT_EHT] : Object.freeze({
     id : getBuiltinRadarPaletteId(RADAR_PRODUCT_EHT),
     name : 'Default',
-    range : [ 0.0, 16.0 ],
+    range : [ 2.0, 17.0 ],
     entries : [
-      createRadarPaletteEntry(0.0, [ 0, 0, 0, 0 ], 'smooth'),
-      createRadarPaletteEntry(1.0, [ 39, 72, 120, 255 ], 'smooth'),
-      createRadarPaletteEntry(3.0, [ 30, 170, 210, 255 ], 'smooth'),
-      createRadarPaletteEntry(6.0, [ 45, 205, 75, 255 ], 'smooth'),
-      createRadarPaletteEntry(9.0, [ 245, 235, 35, 255 ], 'smooth'),
-      createRadarPaletteEntry(12.0, [ 245, 125, 25, 255 ], 'smooth'),
-      createRadarPaletteEntry(16.0, [ 210, 35, 80, 255 ], 'solid'),
+      createRadarPaletteEntry(2.0, [ 51, 20, 146, 255 ], 'smooth'),
+      createRadarPaletteEntry(3.0, [ 16, 63, 203, 255 ], 'smooth'),
+      createRadarPaletteEntry(4.0, [ 0, 170, 224, 255 ], 'smooth'),
+      createRadarPaletteEntry(5.0, [ 25, 184, 77, 255 ], 'smooth'),
+      createRadarPaletteEntry(7.0, [ 104, 215, 35, 255 ], 'smooth'),
+      createRadarPaletteEntry(8.0, [ 220, 235, 0, 255 ], 'smooth'),
+      createRadarPaletteEntry(10.0, [ 255, 221, 0, 255 ], 'smooth'),
+      createRadarPaletteEntry(11.0, [ 255, 146, 0, 255 ], 'smooth'),
+      createRadarPaletteEntry(12.0, [ 255, 88, 0, 255 ], 'smooth'),
+      createRadarPaletteEntry(13.0, [ 236, 0, 0, 255 ], 'smooth'),
+      createRadarPaletteEntry(14.0, [ 178, 0, 0, 255 ], 'smooth'),
+      createRadarPaletteEntry(15.0, [ 238, 238, 238, 255 ], 'smooth'),
+      createRadarPaletteEntry(16.0, [ 248, 134, 255, 255 ], 'smooth'),
+      createRadarPaletteEntry(17.0, [ 255, 45, 231, 255 ], 'solid'),
     ],
   }),
   [RADAR_PRODUCT_VILD] : Object.freeze({
@@ -6315,6 +6322,11 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     return getEnabledRadarTowers().slice(0, RADAR_MAX_RENDER_SITES);
   }
 
+  function getEhtRadarRenderTowers()
+  {
+    return getPolarRadarRenderTowers();
+  }
+
   function shouldUsePolarRadarRenderer(displayMode)
   {
     if (!getRadarProductIdForDisplayMode(displayMode))
@@ -6371,6 +6383,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   function isCompositeRadarProductSelectable(productId)
   {
     return productId == RADAR_PRODUCT_REFLECTIVITY ||
+      productId == RADAR_PRODUCT_EHT ||
       productId == RADAR_PRODUCT_POSH ||
       productId == RADAR_PRODUCT_MEHS;
   }
@@ -6392,6 +6405,12 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   function getSelectedRadarTower()
   {
     return radarTowers.find((tower) => tower.getId() == selectedRadarTowerId) || null;
+  }
+
+  function invalidateRadarProductSnapshots()
+  {
+    lastReflectivitySnapshotTime = -Infinity;
+    radarNeedsMeasure = true;
   }
 
   function setSelectedRadarTower(towerId)
@@ -6428,6 +6447,8 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   {
     if (!towerId)
       return;
+
+    invalidateRadarProductSnapshots();
 
     if (selectedRadarTowerId == towerId) {
       selectedRadarTowerId = null;
@@ -6613,6 +6634,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       ],
       onChange : function(nextType) {
         tower.setRadarType(nextType);
+        invalidateRadarProductSnapshots();
         renderRadarTowerPopup();
       },
     });
@@ -6626,7 +6648,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         step : RADAR_PARAM_LIMITS.rangeKm.step,
         getValue : function() { return settings.customRangeKm; },
         formatValue : function(value) { return Math.round(value).toString(); },
-        onInput : function(value) { tower.setCustomRangeKm(Math.round(value)); },
+        onInput : function(value) {
+          tower.setCustomRangeKm(Math.round(value));
+          invalidateRadarProductSnapshots();
+        },
       });
 
       appendRadarRangeControl(radarTowerPopupBodyEl, {
@@ -6637,7 +6662,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         step : RADAR_PARAM_LIMITS.resolutionKm.step,
         getValue : function() { return settings.customResolutionKm; },
         formatValue : function(value) { return formatRadarUiNumber(value, 2); },
-        onInput : function(value) { tower.setCustomResolutionKm(value); },
+        onInput : function(value) {
+          tower.setCustomResolutionKm(value);
+          invalidateRadarProductSnapshots();
+        },
       });
 
       appendRadarRangeControl(radarTowerPopupBodyEl, {
@@ -6648,7 +6676,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         step : RADAR_PARAM_LIMITS.attenuation.step,
         getValue : function() { return settings.customAttenuation; },
         formatValue : function(value) { return formatRadarUiNumber(value, 2); },
-        onInput : function(value) { tower.setCustomAttenuation(value); },
+        onInput : function(value) {
+          tower.setCustomAttenuation(value);
+          invalidateRadarProductSnapshots();
+        },
       });
 
       appendRadarRangeControl(radarTowerPopupBodyEl, {
@@ -6659,7 +6690,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         step : RADAR_PARAM_LIMITS.refreshSec.step,
         getValue : function() { return settings.customRefreshSec; },
         formatValue : function(value) { return formatRadarUiNumber(value, 2); },
-        onInput : function(value) { tower.setCustomRefreshSec(value); },
+        onInput : function(value) {
+          tower.setCustomRefreshSec(value);
+          invalidateRadarProductSnapshots();
+        },
       });
 
       appendRadarRangeControl(radarTowerPopupBodyEl, {
@@ -6670,7 +6704,10 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
         step : RADAR_PARAM_LIMITS.beamWidthDeg.step,
         getValue : function() { return settings.customBeamWidthDeg; },
         formatValue : function(value) { return formatRadarUiNumber(value, 2); },
-        onInput : function(value) { tower.setCustomBeamWidthDeg(value); },
+        onInput : function(value) {
+          tower.setCustomBeamWidthDeg(value);
+          invalidateRadarProductSnapshots();
+        },
       });
     }
 
@@ -6722,6 +6759,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     const mode = nextMode == RADAR_PANEL_MODE_SINGLE_STATION ? RADAR_PANEL_MODE_SINGLE_STATION : RADAR_PANEL_MODE_COMPOSITE;
     radarPanelMode = mode;
     radarPanelModeForMarkers = mode;
+    invalidateRadarProductSnapshots();
 
     if (mode == RADAR_PANEL_MODE_COMPOSITE && !isCompositeRadarProductSelectable(guiControls.selectedRadarProduct)) {
       setSelectedRadarProduct(RADAR_PRODUCT_REFLECTIVITY, {activateIfImplemented : true});
@@ -6772,6 +6810,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   function handleRadarUiExternalChange()
   {
+    invalidateRadarProductSnapshots();
     syncLegacyRadarProductField();
     updateRadarPanelShell();
     if (radarDrawerOpen) {
@@ -9118,6 +9157,7 @@ var soundingGraph = {
   const rhohvDisplayShader = await loadShader('rhohvDisplayShader.frag');
   const zdrFieldShader = await loadShader('zdrFieldShader.frag');
   const zdrDisplayShader = await loadShader('zdrDisplayShader.frag');
+  const ehtReflectivitySourceShader = await loadShader('ehtReflectivitySourceShader.frag');
   const echoColumnProductsShader = await loadShader('echoColumnProductsShader.frag');
   const universalDisplayShader = await loadShader('universalDisplayShader.frag');
   const radarPolarDisplayShader = await loadShader('radarPolarDisplayShader.frag');
@@ -9154,6 +9194,7 @@ var soundingGraph = {
   const rhohvDisplayProgram = createProgram(dispVertexShader, rhohvDisplayShader);
   const zdrFieldProgram = createProgram(simVertexShader, zdrFieldShader);
   const zdrDisplayProgram = createProgram(dispVertexShader, zdrDisplayShader);
+  const ehtReflectivitySourceProgram = createProgram(simVertexShader, ehtReflectivitySourceShader);
   const echoColumnProductsProgram = createProgram(simVertexShader, echoColumnProductsShader);
   const universalDisplayProgram = createProgram(dispVertexShader, universalDisplayShader);
   const radarPolarDisplayProgram = createProgram(dispVertexShader, radarPolarDisplayShader);
@@ -9628,6 +9669,8 @@ var soundingGraph = {
   const rhohvPreviousSnapshotTex = gl.createTexture();
   const zdrSnapshotTex = gl.createTexture();
   const zdrPreviousSnapshotTex = gl.createTexture();
+  const ehtReflectivitySourceTex = gl.createTexture();
+  const ehtColumnProductsSnapshotTex = gl.createTexture();
   const echoColumnProductsSnapshotTex = gl.createTexture();
   const radarFieldTexture_0 = gl.createTexture();    // smoothed radar field
   const radarFieldTexture_1 = gl.createTexture();    // smoothed radar field
@@ -9673,6 +9716,8 @@ var soundingGraph = {
   reflectivitySnapshotFBO = gl.createFramebuffer();
   const rhohvSnapshotFBO = gl.createFramebuffer();
   const zdrSnapshotFBO = gl.createFramebuffer();
+  const ehtReflectivitySourceFBO = gl.createFramebuffer();
+  const ehtColumnProductsSnapshotFBO = gl.createFramebuffer();
   const echoColumnProductsSnapshotFBO = gl.createFramebuffer();
   const phaseFrameBuff = gl.createFramebuffer();
   const phaseSnapshotFBO = gl.createFramebuffer();
@@ -9792,6 +9837,16 @@ var soundingGraph = {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 
+    gl.bindTexture(gl.TEXTURE_2D, ehtReflectivitySourceTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+    gl.bindTexture(gl.TEXTURE_2D, ehtColumnProductsSnapshotTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
     gl.bindTexture(gl.TEXTURE_2D, echoColumnProductsSnapshotTex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, sim_res_x, sim_res_y, 0, gl.RGBA, gl.FLOAT, null);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
@@ -9844,6 +9899,8 @@ var soundingGraph = {
       rhohvPreviousSnapshotTex,
       zdrSnapshotTex,
       zdrPreviousSnapshotTex,
+      ehtReflectivitySourceTex,
+      ehtColumnProductsSnapshotTex,
       echoColumnProductsSnapshotTex,
       radarFieldTexture_0,
       radarFieldTexture_1,
@@ -9881,6 +9938,54 @@ var soundingGraph = {
     radarPreviousSnapshotReady = true;
   }
 
+  function renderEhtReflectivitySource()
+  {
+    const towers = getEhtRadarRenderTowers();
+    const uniformData = buildPolarRadarUniformData(towers);
+    const usePolarGrid = uniformData.count > 0;
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, ehtReflectivitySourceFBO);
+    gl.viewport(0, 0, sim_res_x, sim_res_y);
+    gl.drawBuffers([ gl.COLOR_ATTACHMENT0 ]);
+    gl.disable(gl.BLEND);
+    gl.useProgram(ehtReflectivitySourceProgram);
+    gl.uniform1f(gl.getUniformLocation(ehtReflectivitySourceProgram, 'reflMult'), guiControls.reflectivityGain);
+    gl.uniform1f(gl.getUniformLocation(ehtReflectivitySourceProgram, 'reflBoost'), guiControls.reflectivityBoost);
+    gl.uniform1f(gl.getUniformLocation(ehtReflectivitySourceProgram, 'simHeightKm'), guiControls.simHeight / 1000.0);
+    gl.uniform1i(gl.getUniformLocation(ehtReflectivitySourceProgram, 'wrapHorizontally'), guiControls.wrapHorizontally ? 1 : 0);
+    gl.uniform1i(gl.getUniformLocation(ehtReflectivitySourceProgram, 'usePolarGrid'), usePolarGrid ? 1 : 0);
+    gl.uniform1i(gl.getUniformLocation(ehtReflectivitySourceProgram, 'compositeMode'), radarPanelMode == RADAR_PANEL_MODE_COMPOSITE && usePolarGrid ? 1 : 0);
+    gl.uniform1i(gl.getUniformLocation(ehtReflectivitySourceProgram, 'attenuationEnabled'), guiControls.radarAttenuationEnabled ? 1 : 0);
+    gl.uniform1i(gl.getUniformLocation(ehtReflectivitySourceProgram, 'radarCount'), uniformData.count);
+    gl.uniform4fv(gl.getUniformLocation(ehtReflectivitySourceProgram, 'radarSites[0]'), uniformData.sites);
+    gl.uniform4fv(gl.getUniformLocation(ehtReflectivitySourceProgram, 'radarParams[0]'), uniformData.params);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, reflectivitySnapshotTex);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, wallTexture_1);
+    gl.bindVertexArray(fluidVao);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+
+  function renderEchoColumnProducts(targetFBO, reflectivityTexture, sourcePixelSize)
+  {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, targetFBO);
+    gl.viewport(0, 0, sim_res_x, sim_res_y);
+    gl.drawBuffers([ gl.COLOR_ATTACHMENT0 ]);
+    gl.disable(gl.BLEND);
+    gl.useProgram(echoColumnProductsProgram);
+    gl.uniform1f(gl.getUniformLocation(echoColumnProductsProgram, 'reflMult'), guiControls.reflectivityGain);
+    gl.uniform1f(gl.getUniformLocation(echoColumnProductsProgram, 'reflBoost'), guiControls.reflectivityBoost);
+    gl.uniform1f(gl.getUniformLocation(echoColumnProductsProgram, 'simHeightKm'), guiControls.simHeight / 1000.0);
+    gl.uniform1f(gl.getUniformLocation(echoColumnProductsProgram, 'sourcePixelSize'), sourcePixelSize);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, reflectivityTexture);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, wallTexture_1);
+    gl.bindVertexArray(fluidVao);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+
   function refreshReflectivitySnapshot(now)
   {
     const hadSnapshot = Number.isFinite(lastReflectivitySnapshotTime);
@@ -9906,19 +10011,9 @@ var soundingGraph = {
     gl.bindTexture(gl.TEXTURE_2D, reflectivitySnapshotTex);
     gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, sim_res_x, sim_res_y);
 
-    gl.bindFramebuffer(gl.FRAMEBUFFER, echoColumnProductsSnapshotFBO);
-    gl.viewport(0, 0, sim_res_x, sim_res_y);
-    gl.drawBuffers([ gl.COLOR_ATTACHMENT0 ]);
-    gl.disable(gl.BLEND);
-    gl.useProgram(echoColumnProductsProgram);
-    gl.uniform1f(gl.getUniformLocation(echoColumnProductsProgram, 'reflMult'), guiControls.reflectivityGain);
-    gl.uniform1f(gl.getUniformLocation(echoColumnProductsProgram, 'reflBoost'), guiControls.reflectivityBoost);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, reflectivitySnapshotTex);
-    gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, wallTexture_1);
-    gl.bindVertexArray(fluidVao);
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    renderEhtReflectivitySource();
+    renderEchoColumnProducts(ehtColumnProductsSnapshotFBO, ehtReflectivitySourceTex, getRadarProductPixelSize('DISP_EHT'));
+    renderEchoColumnProducts(echoColumnProductsSnapshotFBO, reflectivitySnapshotTex, 1.0);
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, rhohvSnapshotFBO);
     gl.viewport(0, 0, sim_res_x, sim_res_y);
@@ -9970,6 +10065,8 @@ var soundingGraph = {
       gl.bindTexture(gl.TEXTURE_2D, rhohvSnapshotTex);
     } else if (displayMode == 'DISP_ZDR') {
       gl.bindTexture(gl.TEXTURE_2D, zdrSnapshotTex);
+    } else if (displayMode == 'DISP_EHT') {
+      gl.bindTexture(gl.TEXTURE_2D, ehtColumnProductsSnapshotTex);
     } else if (getEchoColumnRadarProductMode(displayMode) >= 0) {
       gl.bindTexture(gl.TEXTURE_2D, echoColumnProductsSnapshotTex);
     } else {
@@ -10073,6 +10170,12 @@ var soundingGraph = {
 
   gl.bindFramebuffer(gl.FRAMEBUFFER, zdrSnapshotFBO);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, zdrSnapshotTex, 0);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, ehtReflectivitySourceFBO);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, ehtReflectivitySourceTex, 0);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, ehtColumnProductsSnapshotFBO);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, ehtColumnProductsSnapshotTex, 0);
 
   gl.bindFramebuffer(gl.FRAMEBUFFER, echoColumnProductsSnapshotFBO);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, echoColumnProductsSnapshotTex, 0);
@@ -10502,11 +10605,18 @@ var soundingGraph = {
   gl.uniform1i(gl.getUniformLocation(radarFieldUpdateProgram, 'radarSourceTex'), 3);
   gl.uniform1i(gl.getUniformLocation(radarFieldUpdateProgram, 'fieldUpdateMode'), 0);
 
+  gl.useProgram(ehtReflectivitySourceProgram);
+  gl.uniform2f(gl.getUniformLocation(ehtReflectivitySourceProgram, 'resolution'), sim_res_x, sim_res_y);
+  gl.uniform1i(gl.getUniformLocation(ehtReflectivitySourceProgram, 'reflectivityTex'), 0);
+  gl.uniform1i(gl.getUniformLocation(ehtReflectivitySourceProgram, 'wallTex'), 1);
+  gl.uniform1f(gl.getUniformLocation(ehtReflectivitySourceProgram, 'simHeightKm'), guiControls.simHeight / 1000.0);
+
   gl.useProgram(echoColumnProductsProgram);
   gl.uniform2f(gl.getUniformLocation(echoColumnProductsProgram, 'resolution'), sim_res_x, sim_res_y);
   gl.uniform1i(gl.getUniformLocation(echoColumnProductsProgram, 'reflectivityTex'), 0);
   gl.uniform1i(gl.getUniformLocation(echoColumnProductsProgram, 'wallTex'), 1);
   gl.uniform1f(gl.getUniformLocation(echoColumnProductsProgram, 'simHeightKm'), guiControls.simHeight / 1000.0);
+  gl.uniform1f(gl.getUniformLocation(echoColumnProductsProgram, 'sourcePixelSize'), 1.0);
 
   gl.useProgram(skyBackgroundDisplayProgram);
   gl.uniform2f(gl.getUniformLocation(skyBackgroundDisplayProgram, 'resolution'), sim_res_x, sim_res_y);
@@ -11191,7 +11301,7 @@ var soundingGraph = {
         gl.readBuffer(gl.COLOR_ATTACHMENT0); // reflectivitySnapshotTex
         gl.readPixels(simXposDbg, simYposDbg, 1, 1, gl.RGBA, gl.FLOAT, radarDbg);
       } else if (getEchoColumnRadarProductMode(guiControls.displayMode) >= 0) {
-        gl.bindFramebuffer(gl.FRAMEBUFFER, echoColumnProductsSnapshotFBO);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, guiControls.displayMode == 'DISP_EHT' ? ehtColumnProductsSnapshotFBO : echoColumnProductsSnapshotFBO);
         gl.readBuffer(gl.COLOR_ATTACHMENT0);
         gl.readPixels(simXposDbg, simYposDbg, 1, 1, gl.RGBA, gl.FLOAT, radarDbg);
       } else {
@@ -11666,7 +11776,7 @@ var soundingGraph = {
           gl.activeTexture(gl.TEXTURE0);
           gl.bindTexture(gl.TEXTURE_2D, waterTexture_1);
           gl.activeTexture(gl.TEXTURE4);
-          gl.bindTexture(gl.TEXTURE_2D, echoColumnProductsSnapshotTex);
+          gl.bindTexture(gl.TEXTURE_2D, displayModeEffective == 'DISP_EHT' ? ehtColumnProductsSnapshotTex : echoColumnProductsSnapshotTex);
           gl.activeTexture(gl.TEXTURE2);
           gl.bindTexture(gl.TEXTURE_2D, wallTexture_1);
           gl.uniform1i(gl.getUniformLocation(universalDisplayProgram, 'quantityIndex'), 2);
@@ -11785,7 +11895,7 @@ var soundingGraph = {
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, waterTexture_1);
         gl.activeTexture(gl.TEXTURE4);
-        gl.bindTexture(gl.TEXTURE_2D, echoColumnProductsSnapshotTex);
+        gl.bindTexture(gl.TEXTURE_2D, guiControls.displayMode == 'DISP_EHT' ? ehtColumnProductsSnapshotTex : echoColumnProductsSnapshotTex);
         gl.activeTexture(gl.TEXTURE2);
         gl.bindTexture(gl.TEXTURE_2D, wallTexture_1);
       } else if (guiControls.displayMode == 'DISP_RHOHV') {

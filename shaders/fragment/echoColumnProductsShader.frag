@@ -12,6 +12,7 @@ uniform isampler2D wallTex;
 uniform float reflMult;
 uniform float reflBoost;
 uniform float simHeightKm;
+uniform float sourcePixelSize;
 
 layout(location = 0) out vec4 fragmentColor;
 
@@ -22,6 +23,17 @@ float calcDbz(float zhLinear)
 {
   float zRaw = sqrt(max(zhLinear, 0.0)) * reflMult + max(zhLinear, 0.0) * reflBoost;
   return 4.3429448 * log(zRaw + 1e-6);
+}
+
+ivec2 getSourceCell(ivec2 cell)
+{
+  float blockSize = max(sourcePixelSize, 1.0);
+  if (blockSize <= 1.0)
+    return cell;
+
+  vec2 productGrid = max(floor(resolution / blockSize), vec2(1.0));
+  vec2 sourceCoord = (floor((vec2(cell) + vec2(0.5)) / resolution * productGrid) + vec2(0.5)) / productGrid;
+  return ivec2(clamp(floor(sourceCoord * resolution), vec2(0.0), resolution - vec2(1.0)));
 }
 
 void main()
@@ -43,7 +55,7 @@ void main()
     if (wall[DISTANCE] == 0)
       continue;
 
-    float zhLinear = max(texelFetch(reflectivityTex, cell, 0).r, 0.0);
+    float zhLinear = max(texelFetch(reflectivityTex, getSourceCell(cell), 0).r, 0.0);
     float dbz = calcDbz(zhLinear);
     maxDbz = max(maxDbz, dbz);
 
