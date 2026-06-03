@@ -9832,6 +9832,31 @@ var soundingGraph = {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 
+    [
+      reflectivitySnapshotTex,
+      reflectivityPreviousSnapshotTex,
+      phaseTexture,
+      phaseStatsTexture,
+      sizeStatsTexture,
+      radarMomentsTexture,
+      radarMomentsSnapshotTex,
+      rhohvSnapshotTex,
+      rhohvPreviousSnapshotTex,
+      zdrSnapshotTex,
+      zdrPreviousSnapshotTex,
+      echoColumnProductsSnapshotTex,
+      radarFieldTexture_0,
+      radarFieldTexture_1,
+      hailShaftTexture_0,
+      hailShaftTexture_1,
+      phaseSnapshotTex,
+      phaseStatsSnapshotTex,
+      sizeStatsSnapshotTex,
+    ].forEach((texture) => {
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    });
+
 
     lastSaveTime = new Date();
   }

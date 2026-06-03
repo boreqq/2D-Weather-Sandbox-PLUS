@@ -24,6 +24,29 @@ layout(location = 0) out vec4 radarFieldOut;
 
 #define DISTANCE 1
 
+bool isInsideVerticalDomain(vec2 sampleCoord)
+{
+  return sampleCoord.y >= 0.0 && sampleCoord.y < 1.0;
+}
+
+vec4 weightedFieldSample(vec2 sampleCoord, float weight, inout float weightSum)
+{
+  if (!isInsideVerticalDomain(sampleCoord))
+    return vec4(0.0);
+
+  weightSum += weight;
+  return texture(radarFieldTex, sampleCoord) * weight;
+}
+
+vec4 weightedSourceSample(vec2 sampleCoord, float weight, inout float weightSum)
+{
+  if (!isInsideVerticalDomain(sampleCoord))
+    return vec4(0.0);
+
+  weightSum += weight;
+  return texture(radarSourceTex, sampleCoord) * weight;
+}
+
 vec4 blurField()
 {
   vec2 texCoordXmYm = texCoord + vec2(-texelSize.x, -texelSize.y);
@@ -31,14 +54,19 @@ vec4 blurField()
   vec2 texCoordXmYp = texCoord + vec2(-texelSize.x, texelSize.y);
   vec2 texCoordXpYm = texCoord + vec2(texelSize.x, -texelSize.y);
 
-  vec4 center = texture(radarFieldTex, texCoord) * 4.0;
-  vec4 cross = (texture(radarFieldTex, texCoordXmY0) + texture(radarFieldTex, texCoordXpY0) + texture(radarFieldTex, texCoordX0Ym) +
-                texture(radarFieldTex, texCoordX0Yp)) *
-               2.0;
-  vec4 diag = texture(radarFieldTex, texCoordXmYm) + texture(radarFieldTex, texCoordXpYp) + texture(radarFieldTex, texCoordXmYp) +
-              texture(radarFieldTex, texCoordXpYm);
+  float weightSum = 0.0;
+  vec4 blurred = vec4(0.0);
+  blurred += weightedFieldSample(texCoord, 4.0, weightSum);
+  blurred += weightedFieldSample(texCoordXmY0, 2.0, weightSum);
+  blurred += weightedFieldSample(texCoordXpY0, 2.0, weightSum);
+  blurred += weightedFieldSample(texCoordX0Ym, 2.0, weightSum);
+  blurred += weightedFieldSample(texCoordX0Yp, 2.0, weightSum);
+  blurred += weightedFieldSample(texCoordXmYm, 1.0, weightSum);
+  blurred += weightedFieldSample(texCoordXpYp, 1.0, weightSum);
+  blurred += weightedFieldSample(texCoordXmYp, 1.0, weightSum);
+  blurred += weightedFieldSample(texCoordXpYm, 1.0, weightSum);
 
-  return (center + cross + diag) / 16.0;
+  return weightSum > 0.0 ? blurred / weightSum : vec4(0.0);
 }
 
 vec4 blurSource()
@@ -48,13 +76,19 @@ vec4 blurSource()
   vec2 texCoordXmYp = texCoord + vec2(-texelSize.x, texelSize.y);
   vec2 texCoordXpYm = texCoord + vec2(texelSize.x, -texelSize.y);
 
-  vec4 center = texture(radarSourceTex, texCoord) * 4.0;
-  vec4 cross = (texture(radarSourceTex, texCoordXmY0) + texture(radarSourceTex, texCoordXpY0) + texture(radarSourceTex, texCoordX0Ym) +
-                texture(radarSourceTex, texCoordX0Yp)) *
-               2.0;
-  vec4 diag = texture(radarSourceTex, texCoordXmYm) + texture(radarSourceTex, texCoordXpYp) + texture(radarSourceTex, texCoordXmYp) + texture(radarSourceTex, texCoordXpYm);
+  float weightSum = 0.0;
+  vec4 blurred = vec4(0.0);
+  blurred += weightedSourceSample(texCoord, 4.0, weightSum);
+  blurred += weightedSourceSample(texCoordXmY0, 2.0, weightSum);
+  blurred += weightedSourceSample(texCoordXpY0, 2.0, weightSum);
+  blurred += weightedSourceSample(texCoordX0Ym, 2.0, weightSum);
+  blurred += weightedSourceSample(texCoordX0Yp, 2.0, weightSum);
+  blurred += weightedSourceSample(texCoordXmYm, 1.0, weightSum);
+  blurred += weightedSourceSample(texCoordXpYp, 1.0, weightSum);
+  blurred += weightedSourceSample(texCoordXmYp, 1.0, weightSum);
+  blurred += weightedSourceSample(texCoordXpYm, 1.0, weightSum);
 
-  return (center + cross + diag) / 16.0;
+  return weightSum > 0.0 ? blurred / weightSum : vec4(0.0);
 }
 
 void main()
