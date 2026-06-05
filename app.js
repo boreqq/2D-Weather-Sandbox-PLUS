@@ -6307,6 +6307,13 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     return RADAR_PRODUCT_EHT;
   }
 
+  function isEchoColumnRadarProduct(productId)
+  {
+    return productId == RADAR_PRODUCT_VIL ||
+      productId == RADAR_PRODUCT_VILD ||
+      productId == RADAR_PRODUCT_EHT;
+  }
+
   function getEnabledRadarTowers()
   {
     return radarTowers.filter((tower) => tower.isEnabled());
@@ -6324,7 +6331,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   function getColumnRadarRenderTowers()
   {
-    return getPolarRadarRenderTowers();
+    return [];
   }
 
   function shouldUsePolarRadarRenderer(displayMode)
@@ -6401,7 +6408,28 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
       }
       return RADAR_PRODUCTS.filter((product) => isCompositeRadarProductSelectable(product.id));
     }
-    return RADAR_PRODUCTS;
+    return RADAR_PRODUCTS.filter((product) => !isEchoColumnRadarProduct(product.id));
+  }
+
+  function isRadarProductSelectableInPanelMode(productId, mode = radarPanelMode)
+  {
+    if (mode == RADAR_PANEL_MODE_COMPOSITE)
+      return isCompositeRadarProductSelectable(productId);
+    return !isEchoColumnRadarProduct(productId);
+  }
+
+  function coerceRadarProductForPanelMode()
+  {
+    const displayProductId = getRadarProductIdForDisplayMode(guiControls.displayMode);
+    if (displayProductId && !isRadarProductSelectableInPanelMode(displayProductId)) {
+      guiControls.selectedRadarProduct = RADAR_PRODUCT_REFLECTIVITY;
+      guiControls.lastLiveRadarProduct = RADAR_PRODUCT_REFLECTIVITY;
+      guiControls.displayMode = getDisplayModeForRadarProduct(RADAR_PRODUCT_REFLECTIVITY);
+      return;
+    }
+
+    if (!isRadarProductSelectableInPanelMode(guiControls.selectedRadarProduct))
+      guiControls.selectedRadarProduct = RADAR_PRODUCT_REFLECTIVITY;
   }
 
   function getSelectedRadarTower()
@@ -6763,7 +6791,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
     radarPanelModeForMarkers = mode;
     invalidateRadarProductSnapshots();
 
-    if (mode == RADAR_PANEL_MODE_COMPOSITE && !isCompositeRadarProductSelectable(guiControls.selectedRadarProduct)) {
+    if (!isRadarProductSelectableInPanelMode(guiControls.selectedRadarProduct, mode)) {
       setSelectedRadarProduct(RADAR_PRODUCT_REFLECTIVITY, {activateIfImplemented : true});
       return;
     }
@@ -6813,6 +6841,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   function handleRadarUiExternalChange()
   {
     invalidateRadarProductSnapshots();
+    coerceRadarProductForPanelMode();
     syncLegacyRadarProductField();
     updateRadarPanelShell();
     if (radarDrawerOpen) {
@@ -7704,7 +7733,9 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
 
   function activateRadarProduct(productId, options = {})
   {
-    const product = getRadarProductMeta(productId);
+    let product = getRadarProductMeta(productId);
+    if (!isRadarProductSelectableInPanelMode(product.id))
+      product = getRadarProductMeta(RADAR_PRODUCT_REFLECTIVITY);
     if (!product.isImplemented)
       return false;
 
@@ -7720,7 +7751,7 @@ async function mainScript(initialBaseTex, initialWaterTex, initialWallTex, initi
   function setSelectedRadarProduct(productId, options = {})
   {
     const product = getRadarProductMeta(productId);
-    if (radarPanelMode == RADAR_PANEL_MODE_COMPOSITE && !isCompositeRadarProductSelectable(product.id))
+    if (!isRadarProductSelectableInPanelMode(product.id))
       guiControls.selectedRadarProduct = RADAR_PRODUCT_REFLECTIVITY;
     else
       guiControls.selectedRadarProduct = product.id;
